@@ -1,6 +1,8 @@
 // https://stackoverflow.com/questions/5827612/node-js-fs-readdir-recursive-directory-search
 import path from "path";
-import {readdir} from "fs/promises";
+import {readdir, readFile} from "fs/promises";
+
+const allowedExtensions = ["js", "ts", "mjs", "json", "txt", "md"];
 
 async function* getFiles(dir) {
   const dirents = await readdir(dir, {withFileTypes: true});
@@ -15,7 +17,13 @@ async function* getFiles(dir) {
 }
 
 (async () => {
+  let md = "# Title"
   for await (const f of getFiles(".")) {
-    console.log(f);
+    if (allowedExtensions.includes(f.split(".").at(-1))) {
+      md += `\n\n## ${f}\n\n`
+      md += (await readFile(f, "utf8"));
+    }
   }
+  md += "\n"
+  process.stdout.write(md);
 })();
