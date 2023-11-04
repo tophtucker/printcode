@@ -1,3 +1,5 @@
+To run: `node dirToPandoc.js`
+
 Links along the way:
 
 - `git ls-files | grep '\.js' | xargs wc -l` https://stackoverflow.com/questions/26881441/can-you-get-the-number-of-lines-of-code-from-a-github-repository
