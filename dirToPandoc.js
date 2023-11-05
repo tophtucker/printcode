@@ -4,6 +4,8 @@ import {readdir, readFile} from "fs/promises";
 
 const allowedExtensions = ["js", "ts", "mjs", "json", "txt", "md"];
 
+const root = process.argv[2] || ".";
+
 async function* getFiles(dir) {
   const dirents = await readdir(dir, {withFileTypes: true});
   for (const dirent of dirents) {
@@ -18,12 +20,13 @@ async function* getFiles(dir) {
 
 (async () => {
   let md = "# Title"
-  for await (const f of getFiles(".")) {
+  for await (const f of getFiles(root)) {
     if (allowedExtensions.includes(f.split(".").at(-1))) {
-      md += `\n\n## ${f}\n\n`
+      md += ` \n\n## ${f}\n\n\`\`\``
       md += (await readFile(f, "utf8"));
+      md += "\`\`\`"
     }
   }
-  md += "\n"
+  md += "\n "
   process.stdout.write(md);
 })();
