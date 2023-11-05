@@ -8,17 +8,14 @@ const title = absoluteRoot.split("/").filter(d => d.length).at(-1);
 
 // arbitrary initial ignore stuff, works for me, idk, i should let ppl pass this in
 const ignore = process.argv[3] === "-i" ? ["package-lock.json", "yarn.lock", "**/*.png", "**/*.svg", "**/*.jpg", "**/*.csv", "**/*.pdf", "test/"] : [];
+// respect .gitignore if it exists
 try {
-  // respect .gitignore
   ignore.push(...(await readFile(path.resolve(root, ".gitignore"), "utf8")).split("\n").filter(d => d));
-} catch (e) {
-  // there's no .gitignore, that's ok
-}
+} catch (e) {}
 
-// https://stackoverflow.com/a/30970751/120290
 function escape(s) {
-  let lookup = {'&': "&amp;", '"': "&quot;", '\'': "&apos;", '<': "&lt;", '>': "&gt;"};
-  return s.replace( /[&"'<>]/g, c => lookup[c] );
+  const lookup = {"&": "&amp;", '"': "&quot;", "\'": "&apos;", "<": "&lt;", ">": "&gt;"};
+  return s.replace(/[&"'<>]/g, c => lookup[c]);
 }
 
 async function getFiles(dir, level = 2) {
@@ -46,7 +43,7 @@ h6 { font-size: 1rem; }
 h5 { font-size: 2rem; }
 h4 { font-size: 4rem; }
 h3 { font-size: 8rem; }
-h2 { font-size: 16rem; }
+h2 { font-size: 16rem; break-before: page; }
 h1 { font-size: 32rem; }
 </style>
 <body>
@@ -56,4 +53,5 @@ h1 { font-size: 32rem; }
 ${await getFiles(root)}
 
 </body>
-</html>`);
+</html>
+`);
