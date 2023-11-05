@@ -8,8 +8,6 @@ To run:
 
 To ignore some random default stuff I wanted to ignore:
 
-```
-node index.js ../path/to/repo -i > test.html
-```
+`node index.js ../path/to/repo -i > test.html`
 
 There’s gotta be a better way to do that…
