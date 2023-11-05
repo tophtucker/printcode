@@ -6,7 +6,19 @@ const allowedExtensions = ["js", "ts", "mjs", "json", "txt", "md"];
 
 const root = process.argv[2] || ".";
 const title = process.argv[3] || root.split("/").filter(d => d.length).at(-1);
-let doc = `<html><title>${title}</title><body>
+
+let doc = `<html>
+<title>${title}</title>
+<style>
+h1, h2, h3, h4, h5, h6 { margin-bottom: 1rem; page-break-before: always; }
+h6 { font-size: 1rem; }
+h5 { font-size: 2rem; }
+h4 { font-size: 4rem; }
+h3 { font-size: 8rem; }
+h2 { font-size: 16rem; }
+h1 { font-size: 32rem; }
+</style>
+<body>
 
 <h1>${title}</h1>`;
 
@@ -27,9 +39,11 @@ async function getFiles(dir, level = 2) {
   for (const dirent of dirents) {
     const res = path.resolve(dir, dirent.name);
     if (dirent.isDirectory()) {
-      doc += `<h${level} style="page-break-before:always;">${res}</h${level}>${getFiles(res, level + 1)}`
+      doc += `<h${level}>${dirent.name}</h${level}>`;
+      await getFiles(res, level + 1);
     } else if (allowedExtensions.includes(res.split(".").at(-1))) {
-      doc += `<h${level + 1}>${res}</h${level + 1}><pre>${escape(await readFile(res, "utf8"))}</pre>`;
+      doc += `<h${level + 1}>${dirent.name}</h${level + 1}>
+        <pre>${escape(await readFile(res, "utf8"))}</pre>`;
     }
   }
 }

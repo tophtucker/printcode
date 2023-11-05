@@ -1,60 +1,2185 @@
-<html><title>.</title><body>
+<html>
+<title>src</title>
+<style>
+h1, h2, h3, h4, h5, h6 { margin-bottom: 1rem; page-break-before: always; }
+h6 { font-size: 1rem; }
+h5 { font-size: 2rem; }
+h4 { font-size: 4rem; }
+h3 { font-size: 8rem; }
+h2 { font-size: 16rem; }
+h1 { font-size: 32rem; }
+</style>
+<body>
 
-<h1>.</h1><h2 style="page-break-before:always;">/Users/toph/Development/printCode/.git</h2>[object Promise]<h3>/Users/toph/Development/printCode/README.md</h3><pre>To run: `node dirToPandoc.js`
+<h1>src</h1><h3>build.ts</h3>
+        <pre>import {access, constants, copyFile, readFile, writeFile} from &quot;node:fs/promises&quot;;
+import {basename, dirname, join, normalize, relative} from &quot;node:path&quot;;
+import {cwd} from &quot;node:process&quot;;
+import {fileURLToPath} from &quot;node:url&quot;;
+import {parseArgs} from &quot;node:util&quot;;
+import {getStats, prepareOutput, visitFiles, visitMarkdownFiles} from &quot;./files.js&quot;;
+import {readPages} from &quot;./navigation.js&quot;;
+import {renderServerless} from &quot;./render.js&quot;;
+import {makeCLIResolver} from &quot;./resolver.js&quot;;
+import {findLoader, runCommand} from &quot;./dataloader.js&quot;;
 
-Or try:
+const EXTRA_FILES = new Map([[&quot;node_modules/@observablehq/runtime/dist/runtime.js&quot;, &quot;_observablehq/runtime.js&quot;]]);
 
-node dirToPandoc.js | pandoc -s -o test.html
-node dirToPandoc.js | pandoc -s -o test.pdf --pdf-engine=/Library/TeX/texbin/pdflatex -f markdown-raw_tex
-node dirToPandoc.js ../cli/src/
+async function build(context: CommandContext) {
+  const {sourceRoot, outputRoot} = context;
 
-Links along the way:
+  // Make sure all files are readable before starting to write output files.
+  for await (const sourceFile of visitMarkdownFiles(sourceRoot)) {
+    await access(join(sourceRoot, sourceFile), constants.R_OK);
+  }
 
-- `git ls-files | grep &apos;\.js&apos; | xargs wc -l` https://stackoverflow.com/questions/26881441/can-you-get-the-number-of-lines-of-code-from-a-github-repository
-- https://pandoc.org/MANUAL.html#pandocs-markdown
-- \newpage https://stackoverflow.com/questions/16965490/pandoc-markdown-page-break
-- &quot;You need to wrap your head around the idea that Git stores at least three, and sometimes up to five active copies of each file&quot; https://stackoverflow.com/questions/56235287/what-does-git-ls-files-do-exactly-and-how-do-we-remove-a-file-from-it
-- https://stackoverflow.com/questions/5827612/node-js-fs-readdir-recursive-directory-search
-- https://gist.github.com/lovasoa/8691344
-</pre><h3>/Users/toph/Development/printCode/dirToPandoc.js</h3><pre>// https://stackoverflow.com/questions/5827612/node-js-fs-readdir-recursive-directory-search
-import path from &quot;path&quot;;
-import {readdir, readFile} from &quot;fs/promises&quot;;
+  // Render .md files, building a list of file attachments as we go.
+  const pages = await readPages(sourceRoot);
+  const files: string[] = [];
+  const resolver = await makeCLIResolver();
+  for await (const sourceFile of visitMarkdownFiles(sourceRoot)) {
+    const sourcePath = join(sourceRoot, sourceFile);
+    const outputPath = join(outputRoot, join(dirname(sourceFile), basename(sourceFile, &quot;.md&quot;) + &quot;.html&quot;));
+    console.log(&quot;render&quot;, sourcePath, &quot;→&quot;, outputPath);
+    const path = `/${join(dirname(sourceFile), basename(sourceFile, &quot;.md&quot;))}`;
+    const render = renderServerless(await readFile(sourcePath, &quot;utf-8&quot;), {
+      root: sourceRoot,
+      path,
+      pages,
+      resolver
+    });
+    files.push(...render.files.map((f) =&gt; join(sourceFile, &quot;..&quot;, f.name)));
+    await prepareOutput(outputPath);
+    await writeFile(outputPath, render.html);
+  }
 
-const allowedExtensions = [&quot;js&quot;, &quot;ts&quot;, &quot;mjs&quot;, &quot;json&quot;, &quot;txt&quot;, &quot;md&quot;];
+  // Copy over the public directory.
+  const publicRoot = join(dirname(relative(cwd(), fileURLToPath(import.meta.url))), &quot;..&quot;, &quot;public&quot;);
+  for await (const publicFile of visitFiles(publicRoot)) {
+    const sourcePath = join(publicRoot, publicFile);
+    const outputPath = join(outputRoot, &quot;_observablehq&quot;, publicFile);
+    console.log(&quot;copy&quot;, sourcePath, &quot;→&quot;, outputPath);
+    await prepareOutput(outputPath);
+    await copyFile(sourcePath, outputPath);
+  }
 
-const root = process.argv[2] || &quot;.&quot;;
-const title = process.argv[3] || root.split(&quot;/&quot;).filter(d =&gt; d.length).at(-1);
-let doc = `&lt;html&gt;&lt;title&gt;${title}&lt;/title&gt;&lt;body&gt;
+  // Copy over the referenced files.
+  for (const file of files) {
+    const sourcePath = join(sourceRoot, file);
+    const outputPath = join(outputRoot, &quot;_file&quot;, file);
+    const stats = await getStats(sourcePath);
+    if (!stats) {
+      const {path} = await findLoader(&quot;&quot;, sourcePath);
+      if (!path) {
+        console.error(&quot;missing referenced file&quot;, sourcePath);
+        continue;
+      }
+      console.log(&quot;generate&quot;, path, &quot;→&quot;, outputPath);
+      await runCommand(path, outputPath);
+      continue;
+    }
+    console.log(&quot;copy&quot;, sourcePath, &quot;→&quot;, outputPath);
+    await prepareOutput(outputPath);
+    await copyFile(sourcePath, outputPath);
+  }
 
-&lt;h1&gt;${title}&lt;/h1&gt;`;
-
-// https://stackoverflow.com/a/30970751/120290
-function escape(s) {
-  let lookup = {
-      &apos;&amp;&apos;: &quot;&amp;amp;&quot;,
-      &apos;&quot;&apos;: &quot;&amp;quot;&quot;,
-      &apos;\&apos;&apos;: &quot;&amp;apos;&quot;,
-      &apos;&lt;&apos;: &quot;&amp;lt;&quot;,
-      &apos;&gt;&apos;: &quot;&amp;gt;&quot;
-  };
-  return s.replace( /[&amp;&quot;&apos;&lt;&gt;]/g, c =&gt; lookup[c] );
+  // Copy over required distribution files from node_modules.
+  // TODO: Note that this requires that the build command be run relative to the node_modules directory.
+  for (const [sourcePath, targetFile] of EXTRA_FILES) {
+    const outputPath = join(outputRoot, targetFile);
+    console.log(&quot;copy&quot;, sourcePath, &quot;→&quot;, outputPath);
+    await prepareOutput(outputPath);
+    await copyFile(sourcePath, outputPath);
+  }
 }
 
-async function getFiles(dir, level = 2) {
-  const dirents = await readdir(dir, {withFileTypes: true});
-  for (const dirent of dirents) {
-    const res = path.resolve(dir, dirent.name);
-    if (dirent.isDirectory()) {
-      doc += `&lt;h${level} style=&quot;page-break-before:always;&quot;&gt;${res}&lt;/h${level}&gt;${getFiles(res, level + 1)}`
-    } else if (allowedExtensions.includes(res.split(&quot;.&quot;).at(-1))) {
-      doc += `&lt;h${level + 1}&gt;${res}&lt;/h${level + 1}&gt;&lt;pre&gt;${escape(await readFile(res, &quot;utf8&quot;))}&lt;/pre&gt;`;
+const USAGE = `Usage: observable build [--root dir] [--output dir]`;
+
+interface CommandContext {
+  sourceRoot: string;
+  outputRoot: string;
+}
+
+function makeCommandContext(): CommandContext {
+  const {values} = parseArgs({
+    options: {
+      root: {
+        type: &quot;string&quot;,
+        short: &quot;r&quot;,
+        default: &quot;docs&quot;
+      },
+      output: {
+        type: &quot;string&quot;,
+        short: &quot;o&quot;,
+        default: &quot;dist&quot;
+      }
+    }
+  });
+  if (!values.root || !values.output) {
+    console.error(USAGE);
+    process.exit(1);
+  }
+  return {
+    sourceRoot: normalize(values.root).replace(/\/$/, &quot;&quot;),
+    outputRoot: normalize(values.output).replace(/\/$/, &quot;&quot;)
+  };
+}
+
+await (async function () {
+  const context = makeCommandContext();
+  await build(context);
+  process.exit(0);
+})();
+</pre><h3>dataloader.ts</h3>
+        <pre>import {open} from &quot;node:fs/promises&quot;;
+import {spawn} from &quot;node:child_process&quot;;
+import {join} from &quot;node:path&quot;;
+import {getStats, prepareOutput} from &quot;./files.js&quot;;
+import {renameSync, unlinkSync} from &quot;node:fs&quot;;
+
+const runningCommands = new Map&lt;string, Promise&lt;void&gt;&gt;();
+
+export async function runCommand(commandPath: string, outputPath: string) {
+  if (runningCommands.has(commandPath)) return runningCommands.get(commandPath);
+  const command = new Promise&lt;void&gt;((resolve, reject) =&gt; {
+    const outputTempPath = outputPath + &quot;.tmp&quot;;
+    prepareOutput(outputTempPath).then(() =&gt;
+      open(outputTempPath, &quot;w&quot;).then((cacheFd) =&gt; {
+        const cacheFileStream = cacheFd.createWriteStream({highWaterMark: 1024 * 1024});
+        try {
+          const subprocess = spawn(commandPath, [], {
+            argv0: commandPath,
+            //cwd: dirname(commandPath), // TODO: Need to change commandPath to be relative this?
+            windowsHide: true,
+            stdio: [&quot;ignore&quot;, &quot;pipe&quot;, &quot;inherit&quot;]
+            // timeout: // time in ms
+            // signal: // abort signal
+          });
+          subprocess.stdout.on(&quot;data&quot;, (data) =&gt; cacheFileStream.write(data));
+          subprocess.on(&quot;error&quot;, (error) =&gt; console.error(`${commandPath}: ${error.message}`));
+          subprocess.on(&quot;close&quot;, (code) =&gt; {
+            cacheFd.close().then(() =&gt; {
+              if (code === 0) {
+                renameSync(outputTempPath, outputPath);
+              } else {
+                unlinkSync(outputTempPath);
+              }
+              resolve();
+            }, reject);
+          });
+        } catch (error) {
+          reject(error);
+        } finally {
+          runningCommands.delete(commandPath);
+        }
+      })
+    );
+  });
+  runningCommands.set(commandPath, command);
+  return command;
+}
+
+export async function findLoader(root: string, name: string) {
+  // TODO: It may be more efficient use fs.readdir
+  for (const ext of [&quot;.js&quot;, &quot;.ts&quot;, &quot;.sh&quot;]) {
+    const path = join(root, name) + ext;
+    const stats = await getStats(path);
+    if (stats) return {path, stats};
+  }
+  return {};
+}
+</pre><h3>error.ts</h3>
+        <pre>export class HttpError extends Error {
+  public readonly statusCode: number;
+
+  constructor(message: string, statusCode: number, cause?: any) {
+    super(message ?? `HTTP status ${statusCode}`, cause);
+    this.statusCode = statusCode;
+    Error.captureStackTrace(this, HttpError);
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function isNodeError(error: any): error is NodeJS.ErrnoException {
+  return error instanceof Error &amp;&amp; &quot;errno&quot; in error;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function isHttpError(error: any): error is HttpError {
+  return error instanceof Error &amp;&amp; &quot;statusCode&quot; in error;
+}
+</pre><h3>files.ts</h3>
+        <pre>import type {Stats} from &quot;node:fs&quot;;
+import {accessSync, constants, statSync} from &quot;node:fs&quot;;
+import {mkdir, readdir, stat} from &quot;node:fs/promises&quot;;
+import {dirname, extname, join, normalize, relative} from &quot;node:path&quot;;
+import {isNodeError} from &quot;./error.js&quot;;
+
+// A file is local if it exists in the root folder or a subfolder.
+export function isLocalFile(ref: string | null, root: string): boolean {
+  return (
+    typeof ref === &quot;string&quot; &amp;&amp;
+    !/^(\w+:)\/\//.test(ref) &amp;&amp;
+    !normalize(ref).startsWith(&quot;../&quot;) &amp;&amp;
+    canReadSync(join(root, ref))
+  );
+}
+
+export function pathFromRoot(ref: string | null, root: string): string | null {
+  return isLocalFile(ref, root) ? join(root, ref!) : null;
+}
+
+function canReadSync(path: string): boolean {
+  try {
+    accessSync(path, constants.R_OK);
+    return statSync(path).isFile();
+  } catch (error) {
+    if (isNodeError(error) &amp;&amp; error.code === &quot;ENOENT&quot;) return false;
+    throw error;
+  }
+}
+
+export async function* visitMarkdownFiles(root: string): AsyncGenerator&lt;string&gt; {
+  for await (const file of visitFiles(root)) {
+    if (extname(file) !== &quot;.md&quot;) continue;
+    yield file;
+  }
+}
+
+export async function* visitFiles(root: string): AsyncGenerator&lt;string&gt; {
+  const visited = new Set&lt;number&gt;();
+  const queue: string[] = [(root = normalize(root))];
+  for (const path of queue) {
+    const status = await stat(path);
+    if (status.isDirectory()) {
+      if (visited.has(status.ino)) throw new Error(`Circular directory: ${path}`);
+      visited.add(status.ino);
+      for (const entry of await readdir(path)) {
+        queue.push(join(path, entry));
+      }
+    } else {
+      yield relative(root, path);
     }
   }
 }
 
-await getFiles(root);
+export async function getStats(path: string): Promise&lt;Stats | undefined&gt; {
+  try {
+    return await stat(path);
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== &quot;ENOENT&quot;) throw error;
+  }
+  return;
+}
 
-doc += &quot;&lt;/body&gt;&lt;/html&gt;&quot;;
-process.stdout.write(doc);</pre><h3>/Users/toph/Development/printCode/package.json</h3><pre>{
-  &quot;type&quot;: &quot;module&quot;
-}</pre></body></html>
+export async function prepareOutput(outputPath: string): Promise&lt;void&gt; {
+  const outputDir = dirname(outputPath);
+  if (outputDir === &quot;.&quot;) return;
+  await mkdir(outputDir, {recursive: true});
+}
+</pre><h3>hash.ts</h3>
+        <pre>import {createHash} from &quot;node:crypto&quot;;
+
+export function computeHash(source: string): string {
+  return createHash(&quot;sha256&quot;).update(source).digest(&quot;hex&quot;);
+}
+</pre><h2>javascript</h2><h4>awaits.js</h4>
+        <pre>import {recursive} from &quot;acorn-walk&quot;;
+
+export function findAwaits(node) {
+  const nodes = [];
+
+  recursive(node, null, {
+    Function() {}, // ignore anything inside a function
+    ForOfStatement(node) {
+      if (node.await) nodes.push(node);
+    },
+    AwaitExpression(node) {
+      nodes.push(node);
+    }
+  });
+
+  return nodes;
+}
+</pre><h4>declarations.js</h4>
+        <pre>import {syntaxError} from &quot;./syntaxError.js&quot;;
+
+export function findDeclarations(node, globals, input) {
+  if (node.type !== &quot;Program&quot;) throw new Error(`unexpected type: ${node.type}`);
+
+  const declarations = [];
+
+  function declareLocal(node) {
+    if (globals.has(node.name) || node.name === &quot;arguments&quot;) {
+      throw syntaxError(`Global &apos;${node.name}&apos; cannot be redefined`, node, input);
+    }
+    declarations.push(node);
+  }
+
+  function declarePattern(node) {
+    switch (node.type) {
+      case &quot;Identifier&quot;:
+        declareLocal(node);
+        break;
+      case &quot;ObjectPattern&quot;:
+        node.properties.forEach((node) =&gt; declarePattern(node));
+        break;
+      case &quot;ArrayPattern&quot;:
+        node.elements.forEach((node) =&gt; node &amp;&amp; declarePattern(node));
+        break;
+      case &quot;Property&quot;:
+        declarePattern(node.value);
+        break;
+      case &quot;RestElement&quot;:
+        declarePattern(node.argument);
+        break;
+      case &quot;AssignmentPattern&quot;:
+        declarePattern(node.left);
+        break;
+      default:
+        throw new Error(&quot;Unrecognized pattern type: &quot; + node.type);
+    }
+  }
+
+  function declareImportSpecifier(node) {
+    switch (node.type) {
+      case &quot;ImportSpecifier&quot;:
+      case &quot;ImportNamespaceSpecifier&quot;:
+      case &quot;ImportDefaultSpecifier&quot;:
+        declareLocal(node.local);
+        break;
+      default:
+        throw new Error(&quot;Unrecognized import type: &quot; + node.type);
+    }
+  }
+
+  for (const child of node.body) {
+    switch (child.type) {
+      case &quot;VariableDeclaration&quot;:
+        child.declarations.forEach((declaration) =&gt; declarePattern(declaration.id));
+        break;
+      case &quot;ClassDeclaration&quot;:
+      case &quot;FunctionDeclaration&quot;:
+        declareLocal(child.id);
+        break;
+      case &quot;ImportDeclaration&quot;:
+        child.specifiers.forEach((specifier) =&gt; declareImportSpecifier(specifier));
+        break;
+      case &quot;Class&quot;:
+      case &quot;Function&quot;:
+        throw new Error(`unexpected type: ${child.type}`);
+    }
+  }
+
+  return declarations;
+}
+</pre><h4>features.js</h4>
+        <pre>import {simple} from &quot;acorn-walk&quot;;
+import {syntaxError} from &quot;./syntaxError.js&quot;;
+
+export function findFeatures(node, references, input) {
+  const features = [];
+
+  simple(node, {
+    CallExpression(node) {
+      const {
+        callee,
+        arguments: args,
+        arguments: [arg]
+      } = node;
+
+      // Promote fetches with static literals to file attachment references.
+      if (isLocalFetch(node, references)) {
+        features.push({type: &quot;FileAttachment&quot;, name: getStringLiteralValue(arg)});
+        return;
+      }
+
+      // Ignore function calls that are not references to the feature. For
+      // example, if there’s a local variable called Secret, that will mask the
+      // built-in Secret and won’t be considered a feature.
+      if (
+        callee.type !== &quot;Identifier&quot; ||
+        (callee.name !== &quot;Secret&quot; &amp;&amp; callee.name !== &quot;FileAttachment&quot; &amp;&amp; callee.name !== &quot;DatabaseClient&quot;) ||
+        !references.includes(callee)
+      ) {
+        return;
+      }
+
+      // Forbid dynamic calls.
+      if (args.length !== 1 || !isStringLiteral(arg)) {
+        throw syntaxError(`${callee.name} requires a single literal string argument`, node, input);
+      }
+
+      features.push({type: callee.name, name: getStringLiteralValue(arg)});
+    },
+    // Promote dynamic imports with static literals to file attachment references.
+    ImportExpression: findImport,
+    ImportDeclaration: findImport
+  });
+
+  function findImport(node) {
+    if (isStringLiteral(node.source)) {
+      const value = getStringLiteralValue(node.source);
+      if (value.startsWith(&quot;./&quot;)) {
+        features.push({type: &quot;FileAttachment&quot;, name: value});
+      }
+    }
+  }
+
+  return features;
+}
+
+export function isLocalFetch(node, references) {
+  if (node.type !== &quot;CallExpression&quot;) return false;
+  const {
+    callee,
+    arguments: [arg]
+  } = node;
+  return (
+    callee.type === &quot;Identifier&quot; &amp;&amp;
+    callee.name === &quot;fetch&quot; &amp;&amp;
+    !references.includes(callee) &amp;&amp;
+    arg &amp;&amp;
+    isStringLiteral(arg) &amp;&amp;
+    getStringLiteralValue(arg).startsWith(&quot;./&quot;)
+  );
+}
+
+export function isStringLiteral(node) {
+  return (
+    (node.type === &quot;Literal&quot; &amp;&amp; /^[&apos;&quot;]/.test(node.raw)) ||
+    (node.type === &quot;TemplateLiteral&quot; &amp;&amp; node.expressions.length === 0)
+  );
+}
+
+export function getStringLiteralValue(node) {
+  return node.type === &quot;Literal&quot; ? node.value : node.quasis[0].value.cooked;
+}
+</pre><h4>fetches.js</h4>
+        <pre>import {simple} from &quot;acorn-walk&quot;;
+import {isLocalFetch} from &quot;./features.js&quot;;
+
+export function rewriteFetches(output, root) {
+  simple(root.body, {
+    CallExpression(node) {
+      if (isLocalFetch(node, root.references)) {
+        output.insertLeft(node.arguments[0].start + 3, &quot;_file/&quot;);
+      }
+    }
+  });
+}
+</pre><h4>globals.js</h4>
+        <pre>export const defaultGlobals = new Set([
+  &quot;Array&quot;,
+  &quot;ArrayBuffer&quot;,
+  &quot;atob&quot;,
+  &quot;AudioContext&quot;,
+  &quot;Blob&quot;,
+  &quot;Boolean&quot;,
+  &quot;BigInt&quot;,
+  &quot;btoa&quot;,
+  &quot;clearInterval&quot;,
+  &quot;clearTimeout&quot;,
+  &quot;console&quot;,
+  &quot;crypto&quot;,
+  &quot;CustomEvent&quot;,
+  &quot;DataView&quot;,
+  &quot;Date&quot;,
+  &quot;decodeURI&quot;,
+  &quot;decodeURIComponent&quot;,
+  &quot;devicePixelRatio&quot;,
+  &quot;document&quot;,
+  &quot;encodeURI&quot;,
+  &quot;encodeURIComponent&quot;,
+  &quot;Error&quot;,
+  &quot;escape&quot;,
+  &quot;eval&quot;,
+  &quot;fetch&quot;,
+  &quot;File&quot;,
+  &quot;FileList&quot;,
+  &quot;FileReader&quot;,
+  &quot;Float32Array&quot;,
+  &quot;Float64Array&quot;,
+  &quot;Function&quot;,
+  &quot;Headers&quot;,
+  &quot;Image&quot;,
+  &quot;ImageData&quot;,
+  &quot;Infinity&quot;,
+  &quot;Int16Array&quot;,
+  &quot;Int32Array&quot;,
+  &quot;Int8Array&quot;,
+  &quot;Intl&quot;,
+  &quot;isFinite&quot;,
+  &quot;isNaN&quot;,
+  &quot;JSON&quot;,
+  &quot;Map&quot;,
+  &quot;Math&quot;,
+  &quot;NaN&quot;,
+  &quot;Number&quot;,
+  &quot;navigator&quot;,
+  &quot;Object&quot;,
+  &quot;parseFloat&quot;,
+  &quot;parseInt&quot;,
+  &quot;performance&quot;,
+  &quot;Path2D&quot;,
+  &quot;Promise&quot;,
+  &quot;Proxy&quot;,
+  &quot;RangeError&quot;,
+  &quot;ReferenceError&quot;,
+  &quot;Reflect&quot;,
+  &quot;RegExp&quot;,
+  &quot;cancelAnimationFrame&quot;,
+  &quot;requestAnimationFrame&quot;,
+  &quot;Set&quot;,
+  &quot;setInterval&quot;,
+  &quot;setTimeout&quot;,
+  &quot;String&quot;,
+  &quot;Symbol&quot;,
+  &quot;SyntaxError&quot;,
+  &quot;TextDecoder&quot;,
+  &quot;TextEncoder&quot;,
+  &quot;this&quot;,
+  &quot;TypeError&quot;,
+  &quot;Uint16Array&quot;,
+  &quot;Uint32Array&quot;,
+  &quot;Uint8Array&quot;,
+  &quot;Uint8ClampedArray&quot;,
+  &quot;undefined&quot;,
+  &quot;unescape&quot;,
+  &quot;URIError&quot;,
+  &quot;URL&quot;,
+  &quot;WeakMap&quot;,
+  &quot;WeakSet&quot;,
+  &quot;WebSocket&quot;,
+  &quot;Worker&quot;,
+  &quot;window&quot;
+]);
+</pre><h4>imports.ts</h4>
+        <pre>import {Parser} from &quot;acorn&quot;;
+import {simple} from &quot;acorn-walk&quot;;
+import {readFileSync} from &quot;node:fs&quot;;
+import {dirname, join, relative, resolve} from &quot;node:path&quot;;
+import {parseOptions} from &quot;../javascript.js&quot;;
+import {getStringLiteralValue, isStringLiteral} from &quot;./features.js&quot;;
+
+export function findImports(body, root) {
+  const imports: {name: string}[] = [];
+  const paths = new Set&lt;string&gt;();
+
+  simple(body, {
+    ImportDeclaration: findImport,
+    ImportExpression: findImport,
+    ExportAllDeclaration: findImport,
+    ExportNamedDeclaration: findImport
+  });
+
+  function findImport(node) {
+    if (isStringLiteral(node.source)) {
+      const value = getStringLiteralValue(node.source);
+      if (value.startsWith(&quot;./&quot;)) findLocalImports(join(root, value));
+      imports.push({name: value});
+    }
+  }
+
+  // If this is an import of a local ES module, recursively parse the module to
+  // find transitive imports.
+  function findLocalImports(path) {
+    if (paths.has(path)) return;
+    paths.add(path);
+    try {
+      const input = readFileSync(path, &quot;utf-8&quot;);
+      const program = Parser.parse(input, parseOptions);
+      simple(program, {
+        ImportDeclaration: findLocalImport,
+        ImportExpression: findLocalImport,
+        ExportAllDeclaration: findLocalImport,
+        ExportNamedDeclaration: findLocalImport
+      });
+    } catch {
+      // ignore missing files and syntax errors
+    }
+    function findLocalImport(node) {
+      if (isStringLiteral(node.source)) {
+        const value = getStringLiteralValue(node.source);
+        if (value.startsWith(&quot;./&quot;)) {
+          const subpath = resolve(dirname(path), value);
+          findLocalImports(subpath);
+          imports.push({name: `./${relative(root, subpath)}`});
+        } else {
+          imports.push({name: value});
+        }
+      }
+    }
+  }
+
+  return imports;
+}
+
+// TODO parallelize multiple static imports
+// TODO need to know the local path of the importing notebook; this assumes it’s in the root
+export function rewriteImports(output, root) {
+  simple(root.body, {
+    ImportExpression(node: any) {
+      if (isStringLiteral(node.source)) {
+        const value = getStringLiteralValue(node.source);
+        if (value.startsWith(&quot;./&quot;)) {
+          output.replaceLeft(node.source.start + 1, node.source.start + 3, &quot;/_file/&quot;);
+        }
+      }
+    },
+    ImportDeclaration(node: any) {
+      if (isStringLiteral(node.source)) {
+        const value = getStringLiteralValue(node.source);
+        root.async = true;
+        output.replaceLeft(
+          node.start,
+          node.end,
+          `const ${
+            node.specifiers.some(isNotNamespaceSpecifier)
+              ? `{${node.specifiers.filter(isNotNamespaceSpecifier).map(rewriteImportSpecifier).join(&quot;, &quot;)}}`
+              : node.specifiers.some(isNamespaceSpecifier)
+              ? node.specifiers.find(isNamespaceSpecifier).local.name
+              : &quot;{}&quot;
+          } = await import(${value.startsWith(&quot;./&quot;) ? JSON.stringify(&quot;/_file/&quot; + value.slice(2)) : node.source.raw});`
+        );
+      }
+    }
+  });
+}
+
+function rewriteImportSpecifier(node) {
+  return node.type === &quot;ImportDefaultSpecifier&quot;
+    ? `default: ${node.local.name}`
+    : node.imported.name === node.local.name
+    ? node.local.name
+    : `${node.imported.name}: ${node.local.name}`;
+}
+
+function isNamespaceSpecifier(node) {
+  return node.type === &quot;ImportNamespaceSpecifier&quot;;
+}
+
+function isNotNamespaceSpecifier(node) {
+  return node.type !== &quot;ImportNamespaceSpecifier&quot;;
+}
+</pre><h4>references.js</h4>
+        <pre>import {ancestor, simple} from &quot;acorn-walk&quot;;
+import {syntaxError} from &quot;./syntaxError.js&quot;;
+
+// Based on https://github.com/ForbesLindesay/acorn-globals
+// Copyright (c) 2014 Forbes Lindesay
+// https://github.com/ForbesLindesay/acorn-globals/blob/master/LICENSE
+
+function isScope(node) {
+  return (
+    node.type === &quot;FunctionExpression&quot; ||
+    node.type === &quot;FunctionDeclaration&quot; ||
+    node.type === &quot;ArrowFunctionExpression&quot; ||
+    node.type === &quot;Program&quot;
+  );
+}
+
+function isBlockScope(node) {
+  return (
+    node.type === &quot;BlockStatement&quot; ||
+    node.type === &quot;ForInStatement&quot; ||
+    node.type === &quot;ForOfStatement&quot; ||
+    node.type === &quot;ForStatement&quot; ||
+    isScope(node)
+  );
+}
+
+export function findReferences(node, globals, input) {
+  const locals = new Map();
+  const globalSet = new Set(globals);
+  const references = [];
+
+  function hasLocal(node, name) {
+    const l = locals.get(node);
+    return l ? l.has(name) : false;
+  }
+
+  function declareLocal(node, id) {
+    const l = locals.get(node);
+    if (l) l.add(id.name);
+    else locals.set(node, new Set([id.name]));
+  }
+
+  function declareClass(node) {
+    if (node.id) declareLocal(node, node.id);
+  }
+
+  function declareFunction(node) {
+    node.params.forEach((param) =&gt; declarePattern(param, node));
+    if (node.id) declareLocal(node, node.id);
+    if (node.type !== &quot;ArrowFunctionExpression&quot;) declareLocal(node, {name: &quot;arguments&quot;});
+  }
+
+  function declareCatchClause(node) {
+    if (node.param) declarePattern(node.param, node);
+  }
+
+  function declarePattern(node, parent) {
+    switch (node.type) {
+      case &quot;Identifier&quot;:
+        declareLocal(parent, node);
+        break;
+      case &quot;ObjectPattern&quot;:
+        node.properties.forEach((node) =&gt; declarePattern(node, parent));
+        break;
+      case &quot;ArrayPattern&quot;:
+        node.elements.forEach((node) =&gt; node &amp;&amp; declarePattern(node, parent));
+        break;
+      case &quot;Property&quot;:
+        declarePattern(node.value, parent);
+        break;
+      case &quot;RestElement&quot;:
+        declarePattern(node.argument, parent);
+        break;
+      case &quot;AssignmentPattern&quot;:
+        declarePattern(node.left, parent);
+        break;
+      default:
+        throw new Error(&quot;Unrecognized pattern type: &quot; + node.type);
+    }
+  }
+
+  function declareImportSpecifier(node, parent) {
+    switch (node.type) {
+      case &quot;ImportSpecifier&quot;:
+      case &quot;ImportNamespaceSpecifier&quot;:
+      case &quot;ImportDefaultSpecifier&quot;:
+        declareLocal(parent, node.local);
+        break;
+      default:
+        throw new Error(&quot;Unrecognized import type: &quot; + node.type);
+    }
+  }
+
+  ancestor(node, {
+    VariableDeclaration(node, parents) {
+      let parent = null;
+      for (let i = parents.length - 1; i &gt;= 0 &amp;&amp; parent === null; --i) {
+        if (node.kind === &quot;var&quot; ? isScope(parents[i]) : isBlockScope(parents[i])) {
+          parent = parents[i];
+        }
+      }
+      node.declarations.forEach((declaration) =&gt; declarePattern(declaration.id, parent));
+    },
+    FunctionDeclaration(node, parents) {
+      let parent = null;
+      for (let i = parents.length - 2; i &gt;= 0 &amp;&amp; parent === null; --i) {
+        if (isScope(parents[i])) {
+          parent = parents[i];
+        }
+      }
+      declareLocal(parent, node.id);
+      declareFunction(node);
+    },
+    Function: declareFunction,
+    ClassDeclaration(node, parents) {
+      let parent = null;
+      for (let i = parents.length - 2; i &gt;= 0 &amp;&amp; parent === null; i--) {
+        if (isScope(parents[i])) {
+          parent = parents[i];
+        }
+      }
+      declareLocal(parent, node.id);
+    },
+    Class: declareClass,
+    CatchClause: declareCatchClause,
+    ImportDeclaration(node, [root]) {
+      node.specifiers.forEach((specifier) =&gt; declareImportSpecifier(specifier, root));
+    }
+  });
+
+  function identifier(node, parents) {
+    let name = node.name;
+    if (name === &quot;undefined&quot;) return;
+    for (let i = parents.length - 2; i &gt;= 0; --i) {
+      if (hasLocal(parents[i], name)) {
+        node.declarationDepth = i; // TODO link to declaration?
+        return;
+      }
+    }
+    if (!globalSet.has(name)) {
+      references.push(node);
+    }
+  }
+
+  ancestor(node, {
+    VariablePattern: identifier,
+    Identifier: identifier
+  });
+
+  function checkConst(node) {
+    switch (node?.type) {
+      case &quot;Identifier&quot;:
+      case &quot;VariablePattern&quot;: {
+        if (references.includes(node)) throw syntaxError(`Assignment to external variable &apos;${node.name}&apos;`, node, input);
+        if (globals.has(node.name)) throw syntaxError(`Assignment to global &apos;${node.name}&apos;`, node, input);
+        break;
+      }
+      case &quot;ArrayPattern&quot;: {
+        for (const element of node.elements) checkConst(element);
+        break;
+      }
+      case &quot;ObjectPattern&quot;: {
+        for (const property of node.properties) checkConst(property);
+        break;
+      }
+      case &quot;Property&quot;: {
+        checkConst(node.value);
+        break;
+      }
+      case &quot;RestElement&quot;: {
+        checkConst(node.argument);
+        break;
+      }
+    }
+  }
+
+  simple(node, {
+    AssignmentExpression(node) {
+      checkConst(node.left);
+    },
+    AssignmentPattern(node) {
+      checkConst(node.left);
+    },
+    UpdateExpression(node) {
+      checkConst(node.argument);
+    },
+    ForOfStatement(node) {
+      checkConst(node.left);
+    },
+    ForInStatement(node) {
+      checkConst(node.left);
+    }
+  });
+
+  return references;
+}
+</pre><h4>syntaxError.js</h4>
+        <pre>import {getLineInfo} from &quot;acorn&quot;;
+
+export function syntaxError(message, node, input) {
+  const loc = getLineInfo(input, node.start);
+  const error = new SyntaxError(message + ` (${loc.line}:${loc.column})`);
+  error.pos = node.start;
+  error.loc = loc;
+  return error;
+}
+</pre><h3>javascript.ts</h3>
+        <pre>import {Parser, tokTypes, type Options} from &quot;acorn&quot;;
+import mime from &quot;mime&quot;;
+import {findAwaits} from &quot;./javascript/awaits.js&quot;;
+import {findDeclarations} from &quot;./javascript/declarations.js&quot;;
+import {findFeatures} from &quot;./javascript/features.js&quot;;
+import {rewriteFetches} from &quot;./javascript/fetches.js&quot;;
+import {defaultGlobals} from &quot;./javascript/globals.js&quot;;
+import {findImports, rewriteImports} from &quot;./javascript/imports.js&quot;;
+import {findReferences} from &quot;./javascript/references.js&quot;;
+import {Sourcemap} from &quot;./sourcemap.js&quot;;
+
+export interface DatabaseReference {
+  name: string;
+}
+
+export interface FileReference {
+  name: string;
+  mimeType: string | null;
+}
+
+export interface ImportReference {
+  name: string;
+}
+
+export interface Transpile {
+  id: string;
+  inputs?: string[];
+  outputs?: string[];
+  inline?: boolean;
+  body: string;
+  databases?: DatabaseReference[];
+  files?: FileReference[];
+  imports?: ImportReference[];
+}
+
+export interface ParseOptions {
+  id: string;
+  root: string;
+  inline?: boolean;
+  sourceLine?: number;
+  globals?: Set&lt;string&gt;;
+}
+
+export function transpileJavaScript(input: string, options: ParseOptions): Transpile {
+  const {id} = options;
+  try {
+    const node = parseJavaScript(input, options);
+    const databases = node.features.filter((f) =&gt; f.type === &quot;DatabaseClient&quot;).map((f) =&gt; ({name: f.name}));
+    const files = node.features
+      .filter((f) =&gt; f.type === &quot;FileAttachment&quot;)
+      .map((f) =&gt; ({name: f.name, mimeType: mime.getType(f.name)}));
+    const inputs = Array.from(new Set&lt;string&gt;(node.references.map((r) =&gt; r.name)));
+    const output = new Sourcemap(input);
+    trim(output, input);
+    if (node.expression &amp;&amp; !inputs.includes(&quot;display&quot;) &amp;&amp; !inputs.includes(&quot;view&quot;)) {
+      output.insertLeft(0, &quot;display((\n&quot;);
+      output.insertRight(input.length, &quot;\n))&quot;);
+      inputs.push(&quot;display&quot;);
+    }
+    rewriteImports(output, node);
+    rewriteFetches(output, node);
+    return {
+      id,
+      ...(inputs.length ? {inputs} : null),
+      ...(options.inline ? {inline: true} : null),
+      ...(node.declarations?.length ? {outputs: node.declarations.map(({name}) =&gt; name)} : null),
+      ...(databases.length ? {databases} : null),
+      ...(files.length ? {files} : null),
+      body: `${node.async ? &quot;async &quot; : &quot;&quot;}(${inputs}) =&gt; {
+${String(output)}${node.declarations?.length ? `\nreturn {${node.declarations.map(({name}) =&gt; name)}};` : &quot;&quot;}
+}`,
+      ...(node.imports.length ? {imports: node.imports} : null)
+    };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    let message = error.message;
+    const match = /^(.+)\s\((\d+):(\d+)\)$/.exec(message);
+    if (match) {
+      const line = +match[2] + (options?.sourceLine ?? 0);
+      const column = +match[3] + 1;
+      message = `${match[1]} at line ${line}, column ${column}`;
+    } else if (options?.sourceLine) {
+      message = `${message} at line ${options.sourceLine + 1}`;
+    }
+    // TODO: Consider showing a code snippet along with the error. Also, consider
+    // whether we want to show the file name here.
+    console.error(`${error.name}: ${message}`);
+    return {
+      id: `${id}`,
+      body: `() =&gt; { throw new SyntaxError(${JSON.stringify(error.message)}); }`
+    };
+  }
+}
+
+function trim(output: Sourcemap, input: string): void {
+  if (input.startsWith(&quot;\n&quot;)) output.delete(0, 1); // TODO better trim
+  if (input.endsWith(&quot;\n&quot;)) output.delete(input.length - 1, input.length); // TODO better trim
+}
+
+export const parseOptions: Options = {ecmaVersion: 13, sourceType: &quot;module&quot;};
+
+export function parseJavaScript(input: string, options: ParseOptions) {
+  const {globals = defaultGlobals, inline = false, root} = options;
+  // First attempt to parse as an expression; if this fails, parse as a program.
+  let expression = maybeParseExpression(input, parseOptions);
+  if (expression?.type === &quot;ClassExpression&quot; &amp;&amp; expression.id) expression = null; // treat named class as program
+  if (expression?.type === &quot;FunctionExpression&quot; &amp;&amp; expression.id) expression = null; // treat named function as program
+  if (!expression &amp;&amp; inline) throw new SyntaxError(&quot;invalid expression&quot;);
+  const body = expression ?? (Parser.parse(input, parseOptions) as any);
+  const references = findReferences(body, globals, input);
+  const declarations = expression ? null : findDeclarations(body, globals, input);
+  const features = findFeatures(body, references, input);
+  const imports = findImports(body, root);
+  return {
+    body,
+    declarations,
+    references,
+    features,
+    imports,
+    expression: !!expression,
+    async: findAwaits(body).length &gt; 0
+  };
+}
+
+// Parses a single expression; like parseExpressionAt, but returns null if
+// additional input follows the expression.
+function maybeParseExpression(input, options) {
+  const parser = new Parser(options, input, 0);
+  parser.nextToken();
+  try {
+    const node = (parser as any).parseExpression();
+    return parser.type === tokTypes.eof ? node : null;
+  } catch {
+    return null;
+  }
+}
+</pre><h3>markdown.ts</h3>
+        <pre>import {getPatch, type Patch, type PatchItem} from &quot;fast-array-diff&quot;;
+import equal from &quot;fast-deep-equal&quot;;
+import matter from &quot;gray-matter&quot;;
+import hljs from &quot;highlight.js&quot;;
+import {parseHTML} from &quot;linkedom&quot;;
+import MarkdownIt from &quot;markdown-it&quot;;
+import MarkdownItAnchor from &quot;markdown-it-anchor&quot;;
+import {type RuleCore} from &quot;markdown-it/lib/parser_core.js&quot;;
+import {type RuleInline} from &quot;markdown-it/lib/parser_inline.js&quot;;
+import {type default as Renderer, type RenderRule} from &quot;markdown-it/lib/renderer.js&quot;;
+import mime from &quot;mime&quot;;
+import {readFile} from &quot;node:fs/promises&quot;;
+import {pathFromRoot} from &quot;./files.js&quot;;
+import {computeHash} from &quot;./hash.js&quot;;
+import {transpileJavaScript, type FileReference, type ImportReference, type Transpile} from &quot;./javascript.js&quot;;
+
+export interface ReadMarkdownResult {
+  contents: string;
+  parse: ParseResult;
+  hash: string;
+}
+
+export interface HtmlPiece {
+  type: &quot;html&quot;;
+  id: string;
+  html: string;
+  cellIds?: string[];
+}
+
+export interface CellPiece extends Transpile {
+  type: &quot;cell&quot;;
+}
+
+export type ParsePiece = HtmlPiece | CellPiece;
+
+export interface ParseResult {
+  title: string | null;
+  html: string;
+  data: {[key: string]: any} | null;
+  files: FileReference[];
+  imports: ImportReference[];
+  pieces: HtmlPiece[];
+  cells: CellPiece[];
+}
+
+interface RenderPiece {
+  html: string;
+  code: Transpile[];
+}
+
+interface ParseContext {
+  pieces: RenderPiece[];
+  files: {name: string; mimeType: string | null}[];
+  imports: ImportReference[];
+  startLine: number;
+  currentLine: number;
+}
+
+const TEXT_NODE = 3; // Node.TEXT_NODE
+
+// Returns true if the given document contains exactly one top-level element,
+// ignoring any surrounding whitespace text nodes.
+function isSingleElement(document: Document): boolean {
+  let {firstChild: first, lastChild: last} = document;
+  while (first?.nodeType === TEXT_NODE &amp;&amp; !first?.textContent?.trim()) first = first.nextSibling;
+  while (last?.nodeType === TEXT_NODE &amp;&amp; !last?.textContent?.trim()) last = last.previousSibling;
+  return first !== null &amp;&amp; first === last &amp;&amp; first.nodeType !== TEXT_NODE;
+}
+
+function uniqueCodeId(context: ParseContext, content: string): string {
+  const hash = computeHash(content).slice(0, 8);
+  let id = hash;
+  let count = 1;
+  while (context.pieces.some((piece) =&gt; piece.code.some((code) =&gt; code.id === id))) {
+    id = `${hash}-${count++}`;
+  }
+  return id;
+}
+
+function makeFenceRenderer(root: string, baseRenderer: RenderRule): RenderRule {
+  return (tokens, idx, options, context: ParseContext, self) =&gt; {
+    const token = tokens[idx];
+    const [language, option] = token.info.split(&quot; &quot;);
+    let result = &quot;&quot;;
+    let count = 0;
+    if (language === &quot;js&quot; &amp;&amp; option !== &quot;no-run&quot;) {
+      const id = uniqueCodeId(context, token.content);
+      const transpile = transpileJavaScript(token.content, {
+        id,
+        root,
+        sourceLine: context.startLine + context.currentLine
+      });
+      extendPiece(context, {code: [transpile]});
+      if (transpile.files) context.files.push(...transpile.files);
+      if (transpile.imports) context.imports.push(...transpile.imports);
+      result += `&lt;div id=&quot;cell-${id}&quot; class=&quot;observablehq observablehq--block&quot;&gt;&lt;/div&gt;\n`;
+      count++;
+    }
+    if (language !== &quot;js&quot; || option === &quot;show&quot; || option === &quot;no-run&quot;) {
+      result += baseRenderer(tokens, idx, options, context, self);
+      count++;
+    }
+    // Tokens should always be rendered as a single block element.
+    if (count &gt; 1) result = &quot;&lt;div&gt;&quot; + result + &quot;&lt;/div&gt;&quot;;
+    return result;
+  };
+}
+
+const CODE_DOLLAR = 36;
+const CODE_BRACEL = 123;
+const CODE_BRACER = 125;
+const CODE_BACKSLASH = 92;
+const CODE_QUOTE = 34;
+const CODE_SINGLE_QUOTE = 39;
+const CODE_BACKTICK = 96;
+
+function parsePlaceholder(content: string, replacer: (i: number, j: number) =&gt; void) {
+  let afterDollar = false;
+  for (let j = 0, n = content.length; j &lt; n; ++j) {
+    const cj = content.charCodeAt(j);
+    if (cj === CODE_BACKSLASH) {
+      ++j; // skip next character
+      continue;
+    }
+    if (cj === CODE_DOLLAR) {
+      afterDollar = true;
+      continue;
+    }
+    if (afterDollar) {
+      if (cj === CODE_BRACEL) {
+        let quote = 0; // TODO detect comments, too
+        let braces = 0;
+        let k = j + 1;
+        inner: for (; k &lt; n; ++k) {
+          const ck = content.charCodeAt(k);
+          if (ck === CODE_BACKSLASH) {
+            ++k;
+            continue;
+          }
+          if (quote) {
+            if (ck === quote) quote = 0;
+            continue;
+          }
+          switch (ck) {
+            case CODE_QUOTE:
+            case CODE_SINGLE_QUOTE:
+            case CODE_BACKTICK:
+              quote = ck;
+              break;
+            case CODE_BRACEL:
+              ++braces;
+              break;
+            case CODE_BRACER:
+              if (--braces &lt; 0) {
+                replacer(j - 1, k + 1);
+                break inner;
+              }
+              break;
+          }
+        }
+        j = k;
+      }
+      afterDollar = false;
+    }
+  }
+}
+
+function transformPlaceholderBlock(token) {
+  const input = token.content;
+  if (/^\s*&lt;script(\s|&gt;)/.test(input)) return [token]; // ignore &lt;script&gt; elements
+  const output: any[] = [];
+  let i = 0;
+  parsePlaceholder(input, (j, k) =&gt; {
+    output.push({...token, level: i &gt; 0 ? token.level + 1 : token.level, content: input.slice(i, j)});
+    output.push({type: &quot;placeholder&quot;, level: token.level + 1, content: input.slice(j + 2, k - 1)});
+    i = k;
+  });
+  if (i === 0) return [token];
+  else if (i &lt; input.length) output.push({...token, content: input.slice(i), nesting: -1});
+  return output;
+}
+
+const transformPlaceholderInline: RuleInline = (state, silent) =&gt; {
+  if (silent || state.pos + 2 &gt; state.posMax) return false;
+  const marker1 = state.src.charCodeAt(state.pos);
+  const marker2 = state.src.charCodeAt(state.pos + 1);
+  if (!(marker1 === CODE_DOLLAR &amp;&amp; marker2 === CODE_BRACEL)) return false;
+  let quote = 0;
+  let braces = 0;
+  for (let pos = state.pos + 2; pos &lt; state.posMax; ++pos) {
+    const code = state.src.charCodeAt(pos);
+    if (code === CODE_BACKSLASH) {
+      ++pos; // skip next character
+      continue;
+    }
+    if (quote) {
+      if (code === quote) quote = 0;
+      continue;
+    }
+    switch (code) {
+      case CODE_QUOTE:
+      case CODE_SINGLE_QUOTE:
+      case CODE_BACKTICK:
+        quote = code;
+        break;
+      case CODE_BRACEL:
+        ++braces;
+        break;
+      case CODE_BRACER:
+        if (--braces &lt; 0) {
+          const token = state.push(&quot;placeholder&quot;, &quot;&quot;, 0);
+          token.content = state.src.slice(state.pos + 2, pos);
+          state.pos = pos + 1;
+          return true;
+        }
+        break;
+    }
+  }
+  return false;
+};
+
+const transformPlaceholderCore: RuleCore = (state) =&gt; {
+  const input = state.tokens;
+  const output: any[] = [];
+  for (const token of input) {
+    switch (token.type) {
+      case &quot;html_block&quot;:
+        output.push(...transformPlaceholderBlock(token));
+        break;
+      default:
+        output.push(token);
+        break;
+    }
+  }
+  state.tokens = output;
+};
+
+function makePlaceholderRenderer(root: string): RenderRule {
+  return (tokens, idx, options, context: ParseContext) =&gt; {
+    const id = uniqueCodeId(context, tokens[idx].content);
+    const token = tokens[idx];
+    const transpile = transpileJavaScript(token.content, {
+      id,
+      root,
+      inline: true,
+      sourceLine: context.startLine + context.currentLine
+    });
+    extendPiece(context, {code: [transpile]});
+    if (transpile.files) context.files.push(...transpile.files);
+    return `&lt;span id=&quot;cell-${id}&quot;&gt;&lt;/span&gt;`;
+  };
+}
+
+function makeSoftbreakRenderer(baseRenderer: RenderRule): RenderRule {
+  return (tokens, idx, options, context: ParseContext, self) =&gt; {
+    context.currentLine++;
+    return baseRenderer(tokens, idx, options, context, self);
+  };
+}
+
+function extendPiece(context: ParseContext, extend: Partial&lt;RenderPiece&gt;) {
+  if (context.pieces.length === 0) context.pieces.push({html: &quot;&quot;, code: []});
+  const last = context.pieces[context.pieces.length - 1];
+  context.pieces[context.pieces.length - 1] = {
+    html: last.html + (extend.html ?? &quot;&quot;),
+    code: [...last.code, ...(extend.code ? extend.code : [])]
+  };
+}
+
+function renderIntoPieces(renderer: Renderer, root: string): Renderer[&quot;render&quot;] {
+  return (tokens, options, context: ParseContext) =&gt; {
+    const rules = renderer.rules;
+    for (let i = 0, len = tokens.length; i &lt; len; i++) {
+      const type = tokens[i].type;
+      if (tokens[i].map) context.currentLine = tokens[i].map![0];
+      let html = &quot;&quot;;
+      if (type === &quot;inline&quot;) {
+        html = renderer.renderInline(tokens[i].children!, options, context);
+      } else if (typeof rules[type] !== &quot;undefined&quot;) {
+        if (tokens[i].level === 0 &amp;&amp; tokens[i].nesting !== -1) context.pieces.push({html: &quot;&quot;, code: []});
+        html = rules[type]!(tokens, i, options, context, renderer);
+      } else {
+        if (tokens[i].level === 0 &amp;&amp; tokens[i].nesting !== -1) context.pieces.push({html: &quot;&quot;, code: []});
+        html = renderer.renderToken(tokens, i, options);
+      }
+      extendPiece(context, {html});
+    }
+    let result = &quot;&quot;;
+    for (const piece of context.pieces) {
+      result += piece.html = normalizePieceHtml(piece.html, root, context);
+    }
+    return result;
+  };
+}
+
+// In addition to extracting references to files (such as from linked
+// stylesheets), this ensures that the HTML for each piece generates exactly one
+// top-level element. This is necessary for incremental update, and ensures that
+// our parsing of the Markdown is consistent with the resulting HTML structure.
+function normalizePieceHtml(html: string, root: string, context: ParseContext): string {
+  const {document} = parseHTML(html);
+  for (const element of document.querySelectorAll(&quot;link[href]&quot;) as any as Iterable&lt;Element&gt;) {
+    const href = pathFromRoot(element.getAttribute(&quot;href&quot;), root);
+    if (href) {
+      context.files.push({name: href, mimeType: mime.getType(href)});
+      element.setAttribute(&quot;href&quot;, `/_file/${href}`);
+    }
+  }
+  return isSingleElement(document) ? String(document) : `&lt;span&gt;${document}&lt;/span&gt;`;
+}
+
+function toParsePieces(pieces: RenderPiece[]): HtmlPiece[] {
+  return pieces.map((piece) =&gt; ({
+    type: &quot;html&quot;,
+    id: &quot;&quot;,
+    cellIds: piece.code.map((code) =&gt; `${code.id}`),
+    html: piece.html
+  }));
+}
+
+function toParseCells(pieces: RenderPiece[]): CellPiece[] {
+  const cellPieces: CellPiece[] = [];
+  pieces.forEach((piece) =&gt;
+    piece.code.forEach((code) =&gt;
+      cellPieces.push({
+        type: &quot;cell&quot;,
+        ...code
+      })
+    )
+  );
+  return cellPieces;
+}
+
+export function parseMarkdown(source: string, root: string): ParseResult {
+  const parts = matter(source);
+  // TODO: We need to know what line in the source the markdown starts on and pass that
+  // as startLine in the parse context below.
+  const md = MarkdownIt({
+    html: true,
+    highlight(str, language) {
+      if (language &amp;&amp; hljs.getLanguage(language)) {
+        try {
+          return hljs.highlight(str, {language}).value;
+        } catch (error) {
+          console.error(error);
+        }
+      }
+      return &quot;&quot;; // defaults to escapeHtml(str)
+    }
+  });
+  md.use(MarkdownItAnchor, {permalink: MarkdownItAnchor.permalink.headerLink({class: &quot;observablehq-header-anchor&quot;})});
+  md.inline.ruler.push(&quot;placeholder&quot;, transformPlaceholderInline);
+  md.core.ruler.before(&quot;linkify&quot;, &quot;placeholder&quot;, transformPlaceholderCore);
+  md.renderer.rules.placeholder = makePlaceholderRenderer(root);
+  md.renderer.rules.fence = makeFenceRenderer(root, md.renderer.rules.fence!);
+  md.renderer.rules.softbreak = makeSoftbreakRenderer(md.renderer.rules.softbreak!);
+  md.renderer.render = renderIntoPieces(md.renderer, root);
+  const context: ParseContext = {files: [], imports: [], pieces: [], startLine: 0, currentLine: 0};
+  const tokens = md.parse(parts.content, context);
+  const html = md.renderer.render(tokens, md.options, context); // Note: mutates context.pieces, context.files!
+  return {
+    html,
+    data: isEmpty(parts.data) ? null : parts.data,
+    title: parts.data?.title ?? findTitle(tokens) ?? null,
+    files: context.files,
+    imports: context.imports,
+    pieces: toParsePieces(context.pieces),
+    cells: toParseCells(context.pieces)
+  };
+}
+
+// TODO Use gray-matter’s parts.isEmpty, but only when it’s accurate.
+function isEmpty(object) {
+  for (const key in object) return false;
+  return true;
+}
+
+// TODO Make this smarter.
+function findTitle(tokens: ReturnType&lt;MarkdownIt[&quot;parse&quot;]&gt;): string | undefined {
+  for (const [i, token] of tokens.entries()) {
+    if (token.type === &quot;heading_open&quot; &amp;&amp; token.tag === &quot;h1&quot;) {
+      const next = tokens[i + 1];
+      if (next?.type === &quot;inline&quot;) {
+        const text = next.children
+          ?.filter((t) =&gt; t.type === &quot;text&quot;)
+          .map((t) =&gt; t.content)
+          .join(&quot;&quot;);
+        if (text) {
+          return text;
+        }
+      }
+    }
+  }
+}
+
+function diffReducer(patch: PatchItem&lt;ParsePiece&gt;) {
+  // Remove body from remove updates, we just need the ids.
+  if (patch.type === &quot;remove&quot;) {
+    return {
+      ...patch,
+      items: patch.items.map((item) =&gt; ({
+        type: item.type,
+        id: item.id,
+        ...(&quot;cellIds&quot; in item ? {cellIds: item.cellIds} : null)
+      }))
+    };
+  }
+  return patch;
+}
+
+// Cells are unordered
+function getCellsPatch(prevCells: CellPiece[], nextCells: CellPiece[]): Patch&lt;ParsePiece&gt; {
+  return prevCells
+    .filter((prev) =&gt; !nextCells.some((next) =&gt; equal(prev, next)))
+    .map(
+      (cell): PatchItem&lt;ParsePiece&gt; =&gt; ({
+        type: &quot;remove&quot;,
+        oldPos: prevCells.indexOf(cell),
+        newPos: -1,
+        items: [cell]
+      })
+    )
+    .concat(
+      nextCells
+        .filter((next) =&gt; !prevCells.some((prev) =&gt; equal(next, prev)))
+        .map(
+          (cell): PatchItem&lt;ParsePiece&gt; =&gt; ({
+            type: &quot;add&quot;,
+            oldPos: -1,
+            newPos: nextCells.indexOf(cell),
+            items: [cell]
+          })
+        )
+    );
+}
+
+export function diffMarkdown({parse: prevParse}: ReadMarkdownResult, {parse: nextParse}: ReadMarkdownResult) {
+  return getPatch&lt;ParsePiece&gt;(prevParse.pieces, nextParse.pieces, equal)
+    .concat(getCellsPatch(prevParse.cells, nextParse.cells))
+    .map(diffReducer);
+}
+
+export async function readMarkdown(path: string, root: string): Promise&lt;ReadMarkdownResult&gt; {
+  const contents = await readFile(path, &quot;utf-8&quot;);
+  return {contents, parse: parseMarkdown(contents, root), hash: computeHash(contents)};
+}
+</pre><h3>navigation.ts</h3>
+        <pre>import {readFile} from &quot;node:fs/promises&quot;;
+import {basename, dirname, extname, join} from &quot;node:path&quot;;
+import {isNodeError} from &quot;./error.js&quot;;
+import {visitFiles} from &quot;./files.js&quot;;
+import {parseMarkdown, type ParseResult} from &quot;./markdown.js&quot;;
+import {type RenderOptions} from &quot;./render.js&quot;;
+
+// TODO Global configuration file? Watcher?
+export async function readPages(root: string): Promise&lt;NonNullable&lt;RenderOptions[&quot;pages&quot;]&gt;&gt; {
+  const pages: RenderOptions[&quot;pages&quot;] = [];
+  for await (const file of visitFiles(root)) {
+    if (extname(file) !== &quot;.md&quot;) continue;
+    let parsed: ParseResult;
+    try {
+      parsed = parseMarkdown(await readFile(join(root, file), &quot;utf-8&quot;), root);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== &quot;ENOENT&quot;) throw error; // internal error
+      continue;
+    }
+    const name = basename(file, &quot;.md&quot;);
+    const page = {path: `/${join(dirname(file), name)}`, name: parsed.title ?? &quot;Untitled&quot;};
+    if (name === &quot;index&quot;) pages.unshift(page);
+    else pages.push(page);
+  }
+  return pages;
+}
+</pre><h3>preview.ts</h3>
+        <pre>import type {WatchListener} from &quot;node:fs&quot;;
+import {watch, type FSWatcher} from &quot;node:fs&quot;;
+import {access, constants, readFile, stat} from &quot;node:fs/promises&quot;;
+import {createServer, type IncomingMessage, type RequestListener} from &quot;node:http&quot;;
+import {basename, dirname, extname, join, normalize} from &quot;node:path&quot;;
+import {fileURLToPath} from &quot;node:url&quot;;
+import {parseArgs} from &quot;node:util&quot;;
+import send from &quot;send&quot;;
+import {WebSocketServer, type WebSocket} from &quot;ws&quot;;
+import {HttpError, isHttpError, isNodeError} from &quot;./error.js&quot;;
+import type {ParseResult} from &quot;./markdown.js&quot;;
+import {diffMarkdown, readMarkdown} from &quot;./markdown.js&quot;;
+import {readPages} from &quot;./navigation.js&quot;;
+import {renderPreview} from &quot;./render.js&quot;;
+import type {CellResolver} from &quot;./resolver.js&quot;;
+import {makeCLIResolver} from &quot;./resolver.js&quot;;
+import {findLoader, runCommand} from &quot;./dataloader.js&quot;;
+import {getStats} from &quot;./files.js&quot;;
+
+const publicRoot = join(dirname(fileURLToPath(import.meta.url)), &quot;..&quot;, &quot;public&quot;);
+const cacheRoot = join(dirname(fileURLToPath(import.meta.url)), &quot;..&quot;, &quot;.observablehq&quot;, &quot;cache&quot;);
+
+class Server {
+  private _server: ReturnType&lt;typeof createServer&gt;;
+  private _socketServer: WebSocketServer;
+  readonly port: number;
+  readonly hostname: string;
+  readonly root: string;
+  readonly cacheRoot: string;
+  private _resolver: CellResolver | undefined;
+
+  constructor({port, hostname, root, cacheRoot}: CommandContext) {
+    this.port = port;
+    this.hostname = hostname;
+    this.root = root;
+    this.cacheRoot = cacheRoot;
+    this._server = createServer();
+    this._server.on(&quot;request&quot;, this._handleRequest);
+    this._socketServer = new WebSocketServer({server: this._server});
+    this._socketServer.on(&quot;connection&quot;, this._handleConnection);
+  }
+
+  async start() {
+    this._resolver = await makeCLIResolver();
+    return new Promise&lt;void&gt;((resolve) =&gt; {
+      this._server.listen(this.port, this.hostname, resolve);
+    });
+  }
+
+  _handleRequest: RequestListener = async (req, res) =&gt; {
+    console.log(req.method, req.url);
+    const url = new URL(req.url!, &quot;http://localhost&quot;);
+    let {pathname} = url;
+    try {
+      if (pathname === &quot;/_observablehq/runtime.js&quot;) {
+        send(req, &quot;/@observablehq/runtime/dist/runtime.js&quot;, {root: &quot;./node_modules&quot;}).pipe(res);
+      } else if (pathname.startsWith(&quot;/_observablehq/&quot;)) {
+        send(req, pathname.slice(&quot;/_observablehq&quot;.length), {root: publicRoot}).pipe(res);
+      } else if (pathname.startsWith(&quot;/_file/&quot;)) {
+        const path = pathname.slice(&quot;/_file&quot;.length);
+        const filepath = join(this.root, path);
+        try {
+          await access(filepath, constants.R_OK);
+          send(req, pathname.slice(&quot;/_file&quot;.length), {root: this.root}).pipe(res);
+        } catch (error) {
+          if (isNodeError(error) &amp;&amp; error.code !== &quot;ENOENT&quot;) {
+            throw error;
+          }
+        }
+
+        // Look for a data loader for this file.
+        const {path: loaderPath, stats: loaderStat} = await findLoader(this.root, path);
+        if (loaderStat) {
+          const cachePath = join(this.cacheRoot, filepath);
+          const cacheStat = await getStats(cachePath);
+          if (cacheStat &amp;&amp; cacheStat.mtimeMs &gt; loaderStat.mtimeMs) {
+            send(req, filepath, {root: this.cacheRoot}).pipe(res);
+            return;
+          }
+          if (!(loaderStat.mode &amp; constants.S_IXUSR)) {
+            throw new HttpError(&quot;Data loader is not executable&quot;, 404);
+          }
+          await runCommand(loaderPath, cachePath);
+          send(req, filepath, {root: this.cacheRoot}).pipe(res);
+          return;
+        }
+        throw new HttpError(&quot;Not found&quot;, 404);
+      } else {
+        if (normalize(pathname).startsWith(&quot;..&quot;)) throw new Error(&quot;Invalid path: &quot; + pathname);
+        let path = join(this.root, pathname);
+
+        // If this path is for /index, redirect to the parent directory for a
+        // tidy path. (This must be done before implicitly adding /index below!)
+        if (basename(path, &quot;.html&quot;) === &quot;index&quot;) {
+          res.writeHead(302, {Location: dirname(pathname) + url.search});
+          res.end();
+          return;
+        }
+
+        // If this path resolves to a directory, then add an implicit /index to
+        // the end of the path, assuming that the corresponding index.md exists.
+        try {
+          if ((await stat(path)).isDirectory() &amp;&amp; (await stat(join(path, &quot;index&quot;) + &quot;.md&quot;)).isFile()) {
+            await access(join(path, &quot;index&quot;) + &quot;.md&quot;, constants.R_OK);
+            pathname = join(pathname, &quot;index&quot;);
+            path = join(path, &quot;index&quot;);
+          }
+        } catch (error) {
+          if (!isNodeError(error) || error.code !== &quot;ENOENT&quot;) throw error; // internal error
+        }
+
+        // If this path ends with .html, then redirect to drop the .html. TODO:
+        // Check for the existence of the .md file first.
+        if (extname(path) === &quot;.html&quot;) {
+          res.writeHead(302, {Location: join(dirname(pathname), basename(pathname, &quot;.html&quot;)) + url.search});
+          res.end();
+          return;
+        }
+
+        // Otherwise, serve the corresponding Markdown file, if it exists.
+        // Anything else should 404; static files should be matched above.
+        try {
+          const pages = await readPages(this.root); // TODO cache? watcher?
+          res.end(
+            (
+              await renderPreview(await readFile(path + &quot;.md&quot;, &quot;utf-8&quot;), {
+                root: this.root,
+                path: pathname,
+                pages,
+                resolver: this._resolver!
+              })
+            ).html
+          );
+        } catch (error) {
+          if (!isNodeError(error) || error.code !== &quot;ENOENT&quot;) throw error; // internal error
+          throw new HttpError(&quot;Not found&quot;, 404);
+        }
+      }
+    } catch (error) {
+      console.error(error);
+      res.statusCode = isHttpError(error) ? error.statusCode : 500;
+      res.setHeader(&quot;Content-Type&quot;, &quot;text/plain; charset=utf-8&quot;);
+      res.end(error instanceof Error ? error.message : &quot;Oops, an error occurred&quot;);
+    }
+  };
+
+  _handleConnection = (socket: WebSocket, req: IncomingMessage) =&gt; {
+    if (req.url === &quot;/_observablehq&quot;) {
+      handleWatch(socket, {root: this.root, resolver: this._resolver!});
+    } else {
+      socket.close();
+    }
+  };
+}
+
+class FileWatchers {
+  watchers: FSWatcher[] = [];
+
+  constructor(
+    readonly root: string,
+    readonly files: {name: string}[],
+    readonly cb: (name: string) =&gt; void
+  ) {}
+
+  async watchAll() {
+    const fileset = [...new Set(this.files.map(({name}) =&gt; name))];
+    for (const name of fileset) {
+      const watchPath = await FileWatchers.getWatchPath(this.root, name);
+      let prevState = await getStats(watchPath);
+      this.watchers.push(
+        watch(watchPath, async () =&gt; {
+          const newState = await getStats(watchPath);
+          // Ignore if the file was truncated or not modified.
+          if (prevState?.mtimeMs === newState?.mtimeMs || newState?.size === 0) return;
+          prevState = newState;
+          this.cb(name);
+        })
+      );
+    }
+  }
+
+  static async getWatchPath(root: string, name: string) {
+    const path = join(root, name);
+    const stats = await getStats(path);
+    if (stats?.isFile()) return path;
+    const {path: loaderPath, stats: loaderStat} = await findLoader(root, name);
+    return loaderStat?.isFile() ? loaderPath : path;
+  }
+
+  close() {
+    this.watchers.forEach((w) =&gt; w.close());
+    this.watchers = [];
+  }
+}
+
+function resolveDiffs(diff: ReturnType&lt;typeof diffMarkdown&gt;, resolver: CellResolver): ReturnType&lt;typeof diffMarkdown&gt; {
+  for (const item of diff) {
+    if (item.type === &quot;add&quot;) {
+      for (const addItem of item.items) {
+        if (addItem.type === &quot;cell&quot; &amp;&amp; &quot;databases&quot; in addItem) {
+          Object.assign(addItem, resolver(addItem));
+        }
+      }
+    }
+  }
+  return diff;
+}
+
+function handleWatch(socket: WebSocket, options: {root: string; resolver: CellResolver}) {
+  const {root, resolver} = options;
+  let markdownWatcher: FSWatcher | null = null;
+  let attachmentWatcher: FileWatchers | null = null;
+  console.log(&quot;socket open&quot;);
+
+  function refreshAttachment(parseResult: ParseResult) {
+    return (name: string) =&gt;
+      send({
+        type: &quot;refresh&quot;,
+        cellIds: parseResult.cells.filter((cell) =&gt; cell.files?.some((f) =&gt; f.name === name)).map((cell) =&gt; cell.id)
+      });
+  }
+
+  async function refreshMarkdown(path: string): Promise&lt;WatchListener&lt;string&gt;&gt; {
+    let current = await readMarkdown(path, root);
+    attachmentWatcher = new FileWatchers(root, current.parse.files, refreshAttachment(current.parse));
+    await attachmentWatcher.watchAll();
+    return async function watcher(event) {
+      switch (event) {
+        case &quot;rename&quot;: {
+          markdownWatcher?.close();
+          try {
+            markdownWatcher = watch(path, watcher);
+          } catch (error) {
+            if (isNodeError(error) &amp;&amp; error.code === &quot;ENOENT&quot;) {
+              console.error(`file no longer exists: ${path}`);
+              socket.terminate();
+              return;
+            }
+            throw error;
+          }
+          setTimeout(() =&gt; watcher(&quot;change&quot;), 150); // delay to avoid a possibly-empty file
+          break;
+        }
+        case &quot;change&quot;: {
+          const updated = await readMarkdown(path, root);
+          if (current.hash === updated.hash) break;
+          const diff = resolveDiffs(diffMarkdown(current, updated), resolver);
+          send({type: &quot;update&quot;, diff, previousHash: current.hash, updatedHash: updated.hash});
+          attachmentWatcher?.close();
+          attachmentWatcher = new FileWatchers(root, updated.parse.files, refreshAttachment(updated.parse));
+          current = updated;
+          break;
+        }
+        default:
+          throw new Error(&quot;Unrecognized event: &quot; + event);
+      }
+    };
+  }
+
+  socket.on(&quot;message&quot;, async (data) =&gt; {
+    try {
+      const message = JSON.parse(String(data));
+      console.log(&quot;↑&quot;, message);
+      switch (message.type) {
+        case &quot;hello&quot;: {
+          if (markdownWatcher || attachmentWatcher) throw new Error(&quot;already watching&quot;);
+          let {path} = message;
+          if (normalize(path).startsWith(&quot;..&quot;)) throw new Error(&quot;Invalid path: &quot; + path);
+          if (path.endsWith(&quot;/&quot;)) path += &quot;index&quot;;
+          path = join(root, normalize(path) + &quot;.md&quot;);
+          markdownWatcher = watch(path, await refreshMarkdown(path));
+          break;
+        }
+      }
+    } catch (error) {
+      console.error(&quot;Protocol error&quot;, error);
+      socket.terminate();
+    }
+  });
+
+  socket.on(&quot;error&quot;, (error) =&gt; {
+    console.error(&quot;error&quot;, error);
+  });
+
+  socket.on(&quot;close&quot;, () =&gt; {
+    if (attachmentWatcher) {
+      attachmentWatcher.close();
+      attachmentWatcher = null;
+    }
+    if (markdownWatcher) {
+      markdownWatcher.close();
+      markdownWatcher = null;
+    }
+    console.log(&quot;socket close&quot;);
+  });
+
+  function send(message) {
+    console.log(&quot;↓&quot;, message);
+    socket.send(JSON.stringify(message));
+  }
+}
+
+const USAGE = `Usage: observable preview [--root dir] [--hostname host] [--port port]`;
+
+interface CommandContext {
+  root: string;
+  hostname: string;
+  port: number;
+  cacheRoot: string;
+}
+
+function makeCommandContext(): CommandContext {
+  const {values} = parseArgs({
+    options: {
+      root: {
+        type: &quot;string&quot;,
+        short: &quot;r&quot;,
+        default: &quot;docs&quot;
+      },
+      hostname: {
+        type: &quot;string&quot;,
+        short: &quot;h&quot;
+      },
+      port: {
+        type: &quot;string&quot;,
+        short: &quot;p&quot;
+      }
+    }
+  });
+  if (!values.root) {
+    console.error(USAGE);
+    process.exit(1);
+  }
+  return {
+    root: normalize(values.root).replace(/\/$/, &quot;&quot;),
+    hostname: values.hostname ?? process.env.HOSTNAME ?? &quot;127.0.0.1&quot;,
+    port: values.port ? +values.port : process.env.PORT ? +process.env.PORT : 3000,
+    cacheRoot
+  };
+}
+
+// TODO A --root option should indicate the current working directory within
+// which to find Markdown files, for both --serve and --build. The serving paths
+// and generated file paths should be relative to the root. For example, if the
+// root is ./docs, then / should serve ./docs/index.md, and that same Markdown
+// file should be generated as ./dist/index.html when using --output ./dist.
+
+await (async function () {
+  const context = makeCommandContext();
+  const server = new Server(context);
+  await server.start();
+  console.log(`Server running at http://${server.hostname}:${server.port}/`);
+})();
+</pre><h3>render.ts</h3>
+        <pre>import {computeHash} from &quot;./hash.js&quot;;
+import {type FileReference, type ImportReference} from &quot;./javascript.js&quot;;
+import type {CellPiece} from &quot;./markdown.js&quot;;
+import {parseMarkdown, type ParseResult} from &quot;./markdown.js&quot;;
+
+export interface Render {
+  html: string;
+  files: FileReference[];
+  imports: ImportReference[];
+}
+
+export interface RenderOptions {
+  root: string;
+  path?: string;
+  pages?: {path: string; name: string}[];
+  resolver: (cell: CellPiece) =&gt; CellPiece;
+}
+
+export function renderPreview(source: string, options: RenderOptions): Render {
+  const parseResult = parseMarkdown(source, options.root);
+  return {
+    html: render(parseResult, {...options, preview: true, hash: computeHash(source)}),
+    files: parseResult.files,
+    imports: parseResult.imports
+  };
+}
+
+export function renderServerless(source: string, options: RenderOptions): Render {
+  const parseResult = parseMarkdown(source, options.root);
+  return {
+    html: render(parseResult, options),
+    files: parseResult.files,
+    imports: parseResult.imports
+  };
+}
+
+export function renderDefineCell(cell) {
+  const {id, inline, inputs, outputs, files, body, databases} = cell;
+  return `define({${Object.entries({id, inline, inputs, outputs, files, databases})
+    .filter((arg) =&gt; arg[1] !== undefined)
+    .map((arg) =&gt; `${arg[0]}: ${JSON.stringify(arg[1])}`)
+    .join(&quot;, &quot;)}, body: ${body}});\n`;
+}
+
+type RenderInternalOptions =
+  | {preview?: false; hash?: never} // serverless
+  | {preview: true; hash: string}; // preview
+
+function render(
+  parseResult: ParseResult,
+  {path, pages, preview, hash, resolver}: RenderOptions &amp; RenderInternalOptions
+): string {
+  const showSidebar = pages &amp;&amp; pages.length &gt; 1;
+  const imports = getImportMap(parseResult);
+  return `&lt;!DOCTYPE html&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1, maximum-scale=1&quot;&gt;
+${
+  parseResult.title ? `&lt;title&gt;${escapeData(parseResult.title)}&lt;/title&gt;\n` : &quot;&quot;
+}&lt;link rel=&quot;stylesheet&quot; type=&quot;text/css&quot; href=&quot;https://fonts.googleapis.com/css2?family=Source+Serif+Pro:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&amp;display=swap&quot;&gt;
+&lt;link rel=&quot;stylesheet&quot; type=&quot;text/css&quot; href=&quot;/_observablehq/style.css&quot;&gt;
+&lt;script type=&quot;importmap&quot;&gt;
+${JSON.stringify({imports: Object.fromEntries(Array.from(imports, ([name, href]) =&gt; [name, href]))}, null, 2)}
+&lt;/script&gt;
+${Array.from(imports.values())
+  .concat(parseResult.imports.filter(({name}) =&gt; name.startsWith(&quot;./&quot;)).map(({name}) =&gt; `/_file/${name.slice(2)}`))
+  .map((href) =&gt; `&lt;link rel=&quot;modulepreload&quot; href=&quot;${href}&quot;&gt;`)
+  .join(&quot;\n&quot;)}
+${
+  parseResult.cells.some((cell) =&gt; cell.databases?.length)
+    ? `&lt;link rel=&quot;modulepreload&quot; href=&quot;/_observablehq/database.js&quot;&gt;`
+    : &quot;&quot;
+}
+&lt;script type=&quot;module&quot;&gt;
+
+import {${preview ? &quot;open, &quot; : &quot;&quot;}define} from &quot;/_observablehq/client.js&quot;;
+
+${preview ? `open({hash: ${JSON.stringify(hash)}});\n` : &quot;&quot;}${parseResult.cells
+    .map(resolver)
+    .map(renderDefineCell)
+    .join(&quot;&quot;)}
+&lt;/script&gt;${
+    parseResult.data
+      ? `
+&lt;script type=&quot;application/json&quot;&gt;
+${JSON.stringify(parseResult.data)}
+&lt;/script&gt;`
+      : &quot;&quot;
+  }
+${
+  showSidebar
+    ? `&lt;input id=&quot;observablehq-sidebar-toggle&quot; type=&quot;checkbox&quot;&gt;
+&lt;nav id=&quot;observablehq-sidebar&quot;&gt;
+  &lt;ol&gt;${pages
+    ?.map(
+      (p) =&gt; `
+    &lt;li class=&quot;observablehq-link${p.path === path ? &quot; observablehq-link-active&quot; : &quot;&quot;}&quot;&gt;&lt;a href=&quot;${escapeDoubleQuoted(
+      p.path.replace(/\/index$/, &quot;/&quot;)
+    )}&quot;&gt;${escapeData(p.name)}&lt;/a&gt;&lt;/li&gt;`
+    )
+    .join(&quot;&quot;)}
+  &lt;/ol&gt;
+&lt;/nav&gt;
+&lt;script&gt;{
+  const toggle = document.querySelector(&quot;#observablehq-sidebar-toggle&quot;);
+  const initialState = localStorage.getItem(&quot;observablehq-sidebar&quot;);
+  if (initialState) toggle.checked = initialState === &quot;true&quot;;
+  else toggle.indeterminate = true;
+}&lt;/script&gt;
+`
+    : &quot;&quot;
+}&lt;div id=&quot;observablehq-center&quot;&gt;
+&lt;main id=&quot;observablehq-main&quot; class=&quot;observablehq&quot;&gt;
+${parseResult.html}&lt;/main&gt;
+&lt;footer id=&quot;observablehq-footer&quot;&gt;© ${new Date().getUTCFullYear()} Observable, Inc.&lt;/footer&gt;
+&lt;/div&gt;
+`;
+}
+
+function getImportMap(parseResult: ParseResult): Map&lt;string, string&gt; {
+  const map = new Map([[&quot;npm:@observablehq/runtime&quot;, &quot;/_observablehq/runtime.js&quot;]]);
+  const npm = new Set&lt;string&gt;();
+  for (const {name} of parseResult.imports) if (name.startsWith(&quot;npm:&quot;)) npm.add(name);
+  const inputs = new Set(parseResult.cells.flatMap((cell) =&gt; cell.inputs ?? []));
+  if (inputs.has(&quot;d3&quot;) || inputs.has(&quot;Plot&quot;)) npm.add(&quot;npm:d3&quot;);
+  if (inputs.has(&quot;Plot&quot;)) npm.add(&quot;npm:@observablehq/plot&quot;);
+  if (inputs.has(&quot;htl&quot;) || inputs.has(&quot;html&quot;) || inputs.has(&quot;svg&quot;) || inputs.has(&quot;Inputs&quot;)) npm.add(&quot;npm:htl&quot;);
+  if (inputs.has(&quot;Inputs&quot;)) npm.add(&quot;npm:@observablehq/inputs&quot;);
+  for (const name of npm) map.set(name, `https://cdn.jsdelivr.net/npm/${name.slice(4)}/+esm`);
+  return map;
+}
+
+// TODO Adopt Hypertext Literal?
+function escapeDoubleQuoted(value): string {
+  return `${value}`.replace(/[&quot;&amp;]/g, entity);
+}
+
+// TODO Adopt Hypertext Literal?
+function escapeData(value: string): string {
+  return `${value}`.replace(/[&lt;&amp;]/g, entity);
+}
+
+function entity(character) {
+  return `&amp;#${character.charCodeAt(0).toString()};`;
+}
+</pre><h3>resolver.ts</h3>
+        <pre>import {homedir} from &quot;os&quot;;
+import {join} from &quot;path&quot;;
+import {createHmac} from &quot;node:crypto&quot;;
+import {readFile} from &quot;node:fs/promises&quot;;
+import type {CellPiece} from &quot;./markdown.js&quot;;
+
+export type CellResolver = (cell: CellPiece) =&gt; CellPiece;
+
+export interface ResolvedDatabaseReference {
+  name: string;
+  origin: string;
+  token: string;
+  type: string;
+}
+
+interface DatabaseProxyItem {
+  secret: string;
+}
+
+type DatabaseProxyConfig = Record&lt;string, DatabaseProxyItem&gt;;
+
+interface ObservableConfig {
+  &quot;database-proxy&quot;: DatabaseProxyConfig;
+}
+
+interface DatabaseConfig {
+  host: string;
+  name: string;
+  origin?: string;
+  port: number;
+  secret: string;
+  ssl: &quot;disabled&quot; | &quot;enabled&quot;;
+  type: string;
+  url: string;
+}
+
+const configFile = join(homedir(), &quot;.observablehq&quot;);
+const key = `database-proxy`;
+
+export async function readDatabaseProxyConfig(): Promise&lt;DatabaseProxyConfig | null&gt; {
+  let observableConfig;
+  try {
+    observableConfig = JSON.parse(await readFile(configFile, &quot;utf-8&quot;)) as ObservableConfig | null;
+  } catch (error) {
+    // Ignore missing config file
+  }
+  return observableConfig &amp;&amp; observableConfig[key];
+}
+
+function readDatabaseConfig(config: DatabaseProxyConfig | null, name): DatabaseConfig {
+  if (!config) throw new Error(`Missing database configuration file &quot;${configFile}&quot;`);
+  if (!name) throw new Error(`No database name specified`);
+  const raw = (config &amp;&amp; config[name]) as DatabaseConfig | null;
+  if (!raw) throw new Error(`No configuration found for &quot;${name}&quot;`);
+  return {
+    ...decodeSecret(raw.secret),
+    url: raw.url
+  } as DatabaseConfig;
+}
+
+function decodeSecret(secret: string): Record&lt;string, string&gt; {
+  return JSON.parse(Buffer.from(secret, &quot;base64&quot;).toString(&quot;utf8&quot;));
+}
+
+function encodeToken(payload: {name: string}, secret): string {
+  const data = JSON.stringify(payload);
+  const hmac = createHmac(&quot;sha256&quot;, Buffer.from(secret, &quot;hex&quot;)).update(data).digest();
+  return `${Buffer.from(data).toString(&quot;base64&quot;) + &quot;.&quot; + Buffer.from(hmac).toString(&quot;base64&quot;)}`;
+}
+
+export async function makeCLIResolver(): Promise&lt;CellResolver&gt; {
+  const config = await readDatabaseProxyConfig();
+  return (cell: CellPiece): CellPiece =&gt; {
+    if (&quot;databases&quot; in cell &amp;&amp; cell.databases !== undefined) {
+      cell = {
+        ...cell,
+        databases: cell.databases.map((ref) =&gt; {
+          const db = readDatabaseConfig(config, ref.name);
+          if (db) {
+            const url = new URL(&quot;http://localhost&quot;);
+            url.protocol = db.ssl !== &quot;disabled&quot; ? &quot;https:&quot; : &quot;http:&quot;;
+            url.host = db.host;
+            url.port = String(db.port);
+            url.toString();
+            return {
+              ...ref,
+              token: encodeToken(ref, db.secret),
+              type: db.type,
+              url: url.toString()
+            };
+          }
+          throw new Error(`Unable to resolve database &quot;${ref.name}&quot;`);
+        })
+      };
+    }
+    return cell;
+  };
+}
+</pre><h3>sourcemap.js</h3>
+        <pre>import {lineBreakG} from &quot;acorn&quot;;
+
+export class Sourcemap {
+  constructor(input = &quot;&quot;) {
+    this._input = input;
+    this._edits = [];
+  }
+  _bisectLeft(index) {
+    let lo = 0;
+    let hi = this._edits.length;
+    while (lo &lt; hi) {
+      const mid = (lo + hi) &gt;&gt;&gt; 1;
+      if (this._edits[mid].start &lt; index) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+  _bisectRight(index) {
+    let lo = 0;
+    let hi = this._edits.length;
+    while (lo &lt; hi) {
+      const mid = (lo + hi) &gt;&gt;&gt; 1;
+      if (this._edits[mid].start &gt; index) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo;
+  }
+  insertLeft(index, value) {
+    this.replaceLeft(index, index, value);
+  }
+  insertRight(index, value) {
+    this.replaceRight(index, index, value);
+  }
+  delete(start, end) {
+    this.replaceRight(start, end, &quot;&quot;);
+  }
+  replaceLeft(start, end, value) {
+    this._edits.splice(this._bisectLeft(start), 0, {start, end, value});
+  }
+  replaceRight(start, end, value) {
+    this._edits.splice(this._bisectRight(start), 0, {start, end, value});
+  }
+  translate(position) {
+    let index = 0;
+    let ci = {line: 1, column: 0};
+    let co = {line: 1, column: 0};
+    for (const {start, end, value} of this._edits) {
+      if (start &gt; index) {
+        const l = positionLength(this._input, index, start);
+        const ci2 = positionAdd(ci, l);
+        const co2 = positionAdd(co, l);
+        if (positionCompare(co2, position) &gt; 0) break;
+        ci = ci2;
+        co = co2;
+      }
+      const il = positionLength(this._input, start, end);
+      const ol = positionLength(value);
+      const ci2 = positionAdd(ci, il);
+      const co2 = positionAdd(co, ol);
+      if (positionCompare(co2, position) &gt; 0) return ci;
+      ci = ci2;
+      co = co2;
+      index = end;
+    }
+    const l = positionSubtract(position, co);
+    return positionAdd(ci, l);
+  }
+  toString() {
+    let output = &quot;&quot;;
+    let index = 0;
+    for (const {start, end, value} of this._edits) {
+      if (start &gt; index) output += this._input.slice(index, start);
+      output += value;
+      index = end;
+    }
+    output += this._input.slice(index);
+    return output;
+  }
+}
+
+function positionCompare(a, b) {
+  return a.line - b.line || a.column - b.column;
+}
+
+function positionLength(input, start = 0, end = input.length) {
+  let match,
+    line = 0;
+  lineBreakG.lastIndex = start;
+  while ((match = lineBreakG.exec(input)) &amp;&amp; match.index &lt; end) {
+    ++line;
+    start = match.index + match[0].length;
+  }
+  return {line, column: end - start};
+}
+
+function positionSubtract(b, a) {
+  return b.line === a.line ? {line: 0, column: b.column - a.column} : {line: b.line - a.line, column: b.column};
+}
+
+function positionAdd(p, l) {
+  return l.line === 0 ? {line: p.line, column: p.column + l.column} : {line: p.line + l.line, column: l.column};
+}
+</pre></body></html>
