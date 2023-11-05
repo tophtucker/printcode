@@ -14,3 +14,4 @@ Links along the way:
 - "You need to wrap your head around the idea that Git stores at least three, and sometimes up to five active copies of each file" https://stackoverflow.com/questions/56235287/what-does-git-ls-files-do-exactly-and-how-do-we-remove-a-file-from-it
 - https://stackoverflow.com/questions/5827612/node-js-fs-readdir-recursive-directory-search
 - https://gist.github.com/lovasoa/8691344
+- get a relative path: path.relative(absoluteRoot, res)
