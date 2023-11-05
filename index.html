@@ -1,0 +1,60 @@
+<html><title>.</title><body>
+
+<h1>.</h1><h2 style="page-break-before:always;">/Users/toph/Development/printCode/.git</h2>[object Promise]<h3>/Users/toph/Development/printCode/README.md</h3><pre>To run: `node dirToPandoc.js`
+
+Or try:
+
+node dirToPandoc.js | pandoc -s -o test.html
+node dirToPandoc.js | pandoc -s -o test.pdf --pdf-engine=/Library/TeX/texbin/pdflatex -f markdown-raw_tex
+node dirToPandoc.js ../cli/src/
+
+Links along the way:
+
+- `git ls-files | grep &apos;\.js&apos; | xargs wc -l` https://stackoverflow.com/questions/26881441/can-you-get-the-number-of-lines-of-code-from-a-github-repository
+- https://pandoc.org/MANUAL.html#pandocs-markdown
+- \newpage https://stackoverflow.com/questions/16965490/pandoc-markdown-page-break
+- &quot;You need to wrap your head around the idea that Git stores at least three, and sometimes up to five active copies of each file&quot; https://stackoverflow.com/questions/56235287/what-does-git-ls-files-do-exactly-and-how-do-we-remove-a-file-from-it
+- https://stackoverflow.com/questions/5827612/node-js-fs-readdir-recursive-directory-search
+- https://gist.github.com/lovasoa/8691344
+</pre><h3>/Users/toph/Development/printCode/dirToPandoc.js</h3><pre>// https://stackoverflow.com/questions/5827612/node-js-fs-readdir-recursive-directory-search
+import path from &quot;path&quot;;
+import {readdir, readFile} from &quot;fs/promises&quot;;
+
+const allowedExtensions = [&quot;js&quot;, &quot;ts&quot;, &quot;mjs&quot;, &quot;json&quot;, &quot;txt&quot;, &quot;md&quot;];
+
+const root = process.argv[2] || &quot;.&quot;;
+const title = process.argv[3] || root.split(&quot;/&quot;).filter(d =&gt; d.length).at(-1);
+let doc = `&lt;html&gt;&lt;title&gt;${title}&lt;/title&gt;&lt;body&gt;
+
+&lt;h1&gt;${title}&lt;/h1&gt;`;
+
+// https://stackoverflow.com/a/30970751/120290
+function escape(s) {
+  let lookup = {
+      &apos;&amp;&apos;: &quot;&amp;amp;&quot;,
+      &apos;&quot;&apos;: &quot;&amp;quot;&quot;,
+      &apos;\&apos;&apos;: &quot;&amp;apos;&quot;,
+      &apos;&lt;&apos;: &quot;&amp;lt;&quot;,
+      &apos;&gt;&apos;: &quot;&amp;gt;&quot;
+  };
+  return s.replace( /[&amp;&quot;&apos;&lt;&gt;]/g, c =&gt; lookup[c] );
+}
+
+async function getFiles(dir, level = 2) {
+  const dirents = await readdir(dir, {withFileTypes: true});
+  for (const dirent of dirents) {
+    const res = path.resolve(dir, dirent.name);
+    if (dirent.isDirectory()) {
+      doc += `&lt;h${level} style=&quot;page-break-before:always;&quot;&gt;${res}&lt;/h${level}&gt;${getFiles(res, level + 1)}`
+    } else if (allowedExtensions.includes(res.split(&quot;.&quot;).at(-1))) {
+      doc += `&lt;h${level + 1}&gt;${res}&lt;/h${level + 1}&gt;&lt;pre&gt;${escape(await readFile(res, &quot;utf8&quot;))}&lt;/pre&gt;`;
+    }
+  }
+}
+
+await getFiles(root);
+
+doc += &quot;&lt;/body&gt;&lt;/html&gt;&quot;;
+process.stdout.write(doc);</pre><h3>/Users/toph/Development/printCode/package.json</h3><pre>{
+  &quot;type&quot;: &quot;module&quot;
+}</pre></body></html>
