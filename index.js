@@ -7,7 +7,7 @@ const absoluteRoot = path.resolve(root);
 const title = absoluteRoot.split("/").filter(d => d.length).at(-1);
 
 // arbitrary initial ignore stuff, works for me, idk, i should let ppl pass this in
-let ignore = ["*.pdf", "package-lock.json", "yarn.lock", "*.png", "*.svg", "*.jpg"];
+let ignore = ["package-lock.json", "yarn.lock", "**/*.png", "**/*.svg", "**/*.jpg", "**/*.csv", "**/*.pdf", "test/"];
 try {
   // respect .gitignore
   ignore.push(...(await readFile(path.resolve(root, ".gitignore"), "utf8")).split("\n").filter(d => d));
@@ -23,12 +23,14 @@ function escape(s) {
 
 async function getFiles(dir, level = 2) {
   const dirents = (await glob(dir + "/*", {cwd: absoluteRoot, ignore, withFileTypes: true}))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => (a.isDirectory() - b.isDirectory()) || a.name.localeCompare(b.name));
   return `${await Promise.all(dirents.map(async dirent => {
     const res = path.resolve(dir, dirent.name);
     if (dirent.isDirectory()) {
-      return `<h${level}>${dirent.name}</h${level}>
-        ${await getFiles(res, level + 1)}`;
+      return `<div style="margin-left: 8rem;">
+        <h${level}>${dirent.name}</h${level}>
+        ${await getFiles(res, level + 1)}
+      </div>`;
     } else {
       return `<h${level + 1}>${dirent.name}</h${level + 1}>
         <pre>${escape(await readFile(res, "utf8"))}</pre>`;
