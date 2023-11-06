@@ -6,9 +6,8 @@ const root = process.argv[2] || ".";
 const absoluteRoot = path.resolve(root);
 const title = absoluteRoot.split("/").filter(d => d.length).at(-1);
 
-// arbitrary initial ignore stuff, works for me, idk, i should let ppl pass this in
-const ignore = process.argv[3] === "-i" ? ["package-lock.json", "yarn.lock", "**/*.png", "**/*.svg", "**/*.jpg", "**/*.csv", "**/*.pdf", "test/"] : [];
-// respect .gitignore if it exists
+// Ignore the stuff in ignore.txt in this directory, and in the .gitignore of the directory you pass (if it exists).
+const ignore = (await readFile(path.resolve("./ignore.txt"), "utf8")).split("\n").filter(d => d);
 try {
   ignore.push(...(await readFile(path.resolve(root, ".gitignore"), "utf8")).split("\n").filter(d => d));
 } catch (e) {}
