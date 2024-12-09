@@ -32,12 +32,6 @@ And write it to a file:
 
 `node index.js ../path/to/dir > test.html`
 
-To ignore some random default stuff I wanted to ignore:
-
-`node index.js ../path/to/dir -i > test.html`
-
-There’s gotta be a better way to do that…
-
 In making this it was helpful to count the lines in a repo with variants on `git ls-files | grep '\.js' | xargs wc -l`
 ([via](https://stackoverflow.com/questions/26881441/can-you-get-the-number-of-lines-of-code-from-a-github-repository)).
 Also, shoutout to [Neary](https://twitter.com/_mattneary/status/1720988530464395331)
