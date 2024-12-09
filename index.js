@@ -3,8 +3,7 @@ import {readFile} from "fs/promises";
 import {glob} from "glob";
 
 const root = process.argv[2] || ".";
-const absoluteRoot = path.resolve(root);
-const title = absoluteRoot.split("/").filter(d => d.length).at(-1);
+const title = path.resolve(root).split("/").filter(d => d.length).at(-1);
 
 // Ignore the stuff in ignore.txt in this directory, and in the .gitignore of the directory you pass (if it exists).
 const ignore = (await readFile(path.resolve("./ignore.txt"), "utf8")).split("\n").filter(d => d);
@@ -18,7 +17,7 @@ function escape(s) {
 }
 
 async function getFiles(dir, level = 2) {
-  const dirents = (await glob(dir + "/*", {cwd: absoluteRoot, ignore, withFileTypes: true}))
+  const dirents = (await glob("*", {cwd: dir, ignore, withFileTypes: true}))
     .sort((a, b) => (a.isDirectory() - b.isDirectory()) || a.name.localeCompare(b.name));
   return `${(await Promise.all(dirents.map(async dirent => {
     const res = path.resolve(dir, dirent.name);
