@@ -20,7 +20,7 @@ function escape(s) {
 async function getFiles(dir, level = 2) {
   const dirents = (await glob(dir + "/*", {cwd: absoluteRoot, ignore, withFileTypes: true}))
     .sort((a, b) => (a.isDirectory() - b.isDirectory()) || a.name.localeCompare(b.name));
-  return `${await Promise.all(dirents.map(async dirent => {
+  return `${(await Promise.all(dirents.map(async dirent => {
     const res = path.resolve(dir, dirent.name);
     if (dirent.isDirectory()) {
       return `<div style="margin-left: 8rem;">
@@ -31,7 +31,7 @@ async function getFiles(dir, level = 2) {
       return `<h${level + 1}>${dirent.name}</h${level + 1}>
         <pre>${escape(await readFile(res, "utf8"))}</pre>`;
     }
-  }))}`
+  }))).join("\n")}`
 }
 
 process.stdout.write(`<html>
